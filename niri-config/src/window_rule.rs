@@ -35,7 +35,7 @@ pub struct WindowRule {
     #[knuffel(child, unwrap(argument))]
     pub open_focused: Option<bool>,
     #[knuffel(child, unwrap(argument))]
-    pub focus_on_xdg_activate: Option<bool>,
+    pub on_xdg_activate: Option<OnXdgActivate>,
 
     // Rules applied dynamically.
     #[knuffel(child, unwrap(argument))]
@@ -217,6 +217,13 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for FloatSpawn {
             distance: raw.distance.map_or(0., |distance| distance.0),
         })
     }
+}
+
+#[derive(knuffel::DecodeScalar, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnXdgActivate {
+    Ignore,
+    SetUrgent,
+    Focus,
 }
 
 #[derive(knuffel::DecodeScalar, Debug, Default, Clone, Copy, PartialEq, Eq)]

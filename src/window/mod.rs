@@ -1,7 +1,7 @@
 use std::cmp::{max, min};
 
 use niri_config::utils::MergeWith as _;
-use niri_config::window_rule::{FloatSpawn, Match, WindowRule};
+use niri_config::window_rule::{FloatSpawn, Match, OnXdgActivate, WindowRule};
 use niri_config::{
     BackgroundEffect, BlockOutFrom, BorderRule, CornerRadius, FloatingPosition, PresetSize,
     ResolvedPopupsRules, ShadowRule, TabIndicatorRule,
@@ -76,8 +76,8 @@ pub struct ResolvedWindowRules {
     /// Whether the window should open focused.
     pub open_focused: Option<bool>,
 
-    /// Whether the window should receive focus on xdg-activation requests.
-    pub focus_on_xdg_activate: Option<bool>,
+    /// What to do on xdg-activation requests.
+    pub on_xdg_activate: Option<OnXdgActivate>,
 
     /// Extra bound on the minimum window width.
     pub min_width: Option<u16>,
@@ -267,8 +267,8 @@ impl ResolvedWindowRules {
                     resolved.open_focused = Some(x);
                 }
 
-                if let Some(x) = rule.focus_on_xdg_activate {
-                    resolved.focus_on_xdg_activate = Some(x);
+                if let Some(x) = rule.on_xdg_activate {
+                    resolved.on_xdg_activate = Some(x);
                 }
 
                 if let Some(x) = rule.min_width {
