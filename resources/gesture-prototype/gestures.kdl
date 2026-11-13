@@ -1,0 +1,35 @@
+// PROTOTYPE ONLY: stock niri 26.04 does not understand touchpad-gesture.
+// This is not included by your live config.kdl.
+// Hold Super before swiping. The copy progressively lifts/shrinks toward center
+// as your fingers move, while the desktop pans underneath. A pause or finger-up
+// smoothly finishes a partial lift; Super keeps carry mode active between strokes.
+// The source slot stays reserved as a fading ghost. Release Super to drop;
+// Escape cancels. Increase pickup-distance for a longer, more gradual pickup.
+// drop-duration-ms controls the move/grow transition into the destination slot.
+touchpad-gesture fingers=3 modifiers="Super" direction="any" threshold=4.0 sensitivity=1.0 preview-scale=0.85 pickup-distance=120.0 drop-duration-ms=300 {
+    carry-window
+}
+
+// The earlier direct, finger-following drag remains available as `drag-window`
+// if you want to bind that behavior to a different modifier/finger combination.
+
+// Examples of additional mappings (uncomment to enable in the prototype):
+// No-modifier gestures keep niri's built-in defaults unless explicitly mapped.
+
+// touchpad-gesture fingers=4 modifiers="Super" direction="horizontal" {
+//     scroll-view
+// }
+
+// touchpad-gesture fingers=4 modifiers="Super" direction="vertical" {
+//     switch-workspace
+// }
+
+// A normal niri action runs once on successful release, not on every update.
+// touchpad-gesture fingers=4 modifiers="Super+Shift" direction="up" {
+//     run { spawn "kitty"; }
+// }
+
+// Continuous overview control:
+// touchpad-gesture fingers=4 modifiers="Super+Shift" direction="vertical" {
+//     overview
+// }

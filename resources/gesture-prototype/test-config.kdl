@@ -1,0 +1,35 @@
+// Standalone prototype config; deliberately does not start your desktop shell
+// or change systemd's session environment. Not loaded by your live session.
+input {
+    touchpad {
+        tap
+        natural-scroll
+    }
+}
+
+prefer-no-csd
+
+layout {
+    gaps 16
+    default-column-width { proportion 0.5; }
+    focus-ring { width 4; active-color "#8698df"; }
+}
+
+include "gestures.kdl"
+
+binds {
+    Mod+Return { spawn "kitty"; }
+    Mod+Q { close-window; }
+    Mod+Shift+Escape { quit skip-confirmation=true; }
+    Mod+F { maximize-column; }
+    Mod+Shift+F { fullscreen-window; }
+    Mod+M { maximize-window-to-edges; }
+    Mod+O { toggle-overview; }
+    Mod+Left { focus-column-left; }
+    Mod+Right { focus-column-right; }
+    Mod+Up { focus-workspace-up; }
+    Mod+Down { focus-workspace-down; }
+    Mod+Shift+Up { move-window-to-workspace-up; }
+    Mod+Shift+Down { move-window-to-workspace-down; }
+    Mod+Space { toggle-window-floating; }
+}
