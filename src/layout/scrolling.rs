@@ -30,6 +30,10 @@ use crate::window::ResolvedWindowRules;
 /// Amount of touchpad movement to scroll the view for the width of one working area.
 const VIEW_GESTURE_WORKING_AREA_MOVEMENT: f64 = 1200.;
 
+/// Fraction of the working area width, measured from alignment, over which a full-width column
+/// blends between its gapped slot and the screen edges.
+const SMART_EDGES_BLEND_FRACTION: f64 = 0.25;
+
 /// A scrollable-tiling space for windows.
 #[derive(Debug)]
 pub struct ScrollingSpace<W: LayoutElement> {
@@ -402,12 +406,25 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let view_pos = self.view_pos();
         let gaps = self.options.layout.gaps;
         let aligned_x = self.working_area.loc.x + gaps;
+        // Blend only over the last stretch of travel toward alignment. A full-width column that
+        // stays partly visible next to a focused neighbor is therefore fully normal.
+        let blend = f64::max(1., self.working_area.size.w * SMART_EDGES_BLEND_FRACTION);
+        let view_at_rest = self.view_offset.is_static();
         for (col, col_x) in self.columns_mut() {
-            let screen_x = col_x - view_pos + col.render_offset().x;
-            let travel = f64::max(1., col.width() + gaps);
-            let visible = 1. - ((screen_x - aligned_x).abs() / travel).clamp(0., 1.);
-            // Smoothstep: no velocity discontinuity at either end of the blend.
-            let progress = visible * visible * (3. - 2. * visible);
+            let render_offset = col.render_offset().x;
+            let distance = (col_x - view_pos + render_offset - aligned_x).abs();
+            let progress = if view_at_rest && render_offset == 0. {
+                // Never rest in between: aligned is fully expanded, anything else normal.
+                if distance < 0.5 {
+                    1.
+                } else {
+                    0.
+                }
+            } else {
+                let near = 1. - (distance / blend).clamp(0., 1.);
+                // Smoothstep: no velocity discontinuity at either end of the blend.
+                near * near * (3. - 2. * near)
+            };
             for tile in &mut col.tiles {
                 tile.set_smart_edges_progress(progress);
             }

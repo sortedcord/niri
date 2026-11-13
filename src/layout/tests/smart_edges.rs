@@ -294,3 +294,56 @@ fn edge_expansion_survives_moving_the_column_to_another_workspace() {
     assert_eq!(progress(&layout, 1), 1.);
     assert_eq!(tile(&layout, 1).window_size(), Size::from((1280., 720.)));
 }
+
+#[test]
+fn partly_visible_full_width_neighbor_rests_with_normal_margins() {
+    // Regression: focusing a half-width neighbor leaves the full-width column half on screen.
+    // It must rest fully normal, with the same gaps as any other window, not half-expanded.
+    let mut layout = full_then_half(true);
+    Op::FocusColumnRight.apply(&mut layout);
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.update_render_elements(None);
+
+    let x = tile_x(&layout, 1);
+    assert!(
+        x < 16. && x + 1248. > 0.,
+        "column 1 must still be partly visible (x = {x})"
+    );
+    assert_eq!(progress(&layout, 1), 0.);
+    let tile = tile(&layout, 1);
+    let (rect, _) = tile.smart_edges_window_rect().unwrap();
+    assert_eq!(
+        rect,
+        Rectangle::new(Point::from((0., 0.)), Size::from((1248., 688.)))
+    );
+    assert_eq!(tile.expanded_progress(), 0.);
+    // Same vertical margins as the half-width neighbor.
+    let neighbor = layout
+        .workspaces()
+        .flat_map(|(_, _, ws)| ws.tiles_with_render_positions())
+        .find(|(tile, _, _)| *tile.window().id() == 2)
+        .unwrap();
+    let full = layout
+        .workspaces()
+        .flat_map(|(_, _, ws)| ws.tiles_with_render_positions())
+        .find(|(tile, _, _)| *tile.window().id() == 1)
+        .unwrap();
+    assert_eq!(full.1.y + rect.loc.y, neighbor.1.y);
+    assert_eq!(rect.size.h, neighbor.0.tile_size().h);
+}
+
+#[test]
+fn blending_happens_only_near_alignment() {
+    let mut layout = full_then_half(true);
+    let output = layout.outputs().next().unwrap().clone();
+    layout.view_offset_gesture_begin(&output, None, false);
+    // 10% of the working width away: partially expanded.
+    layout.view_offset_gesture_update(128., Duration::from_millis(10), false);
+    layout.update_render_elements(None);
+    let near = progress(&layout, 1);
+    assert!(near > 0. && near < 1.);
+    // 30% away (beyond the 25% blend distance): fully normal even mid-gesture.
+    layout.view_offset_gesture_update(256., Duration::from_millis(20), false);
+    layout.update_render_elements(None);
+    assert_eq!(progress(&layout, 1), 0.);
+}

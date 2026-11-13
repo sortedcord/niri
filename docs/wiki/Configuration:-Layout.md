@@ -163,6 +163,7 @@ If set, a column that is full width and contains a single window expands that wi
 
 As the column scrolls toward its aligned position, the window smoothly grows from its normal gapped slot to the edges of the available area (your bar stays visible), while its border, focus ring, shadow, and rounded corners fade out.
 Scrolling away reverses the blend.
+The blend happens over the final quarter of the working-area width before alignment, and the window never rests in between: a full-width column left partly visible next to a focused neighbor shows normal gaps.
 The column's layout slot keeps its normal gaps, so neighboring columns never move, and the window is not resized while navigating: niri asks it for the edge-to-edge size once, when the column becomes eligible.
 
 Only normal (non-tabbed) full-width columns with exactly one tiled window are affected; this includes columns maximized with `maximize-column` and `proportion 1.0` widths.

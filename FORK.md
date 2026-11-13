@@ -55,7 +55,9 @@ available area as the column scrolls into its aligned position. Gaps, border,
 focus ring, shadow, and rounded corners fade out; the bar stays visible.
 Scrolling away blends it back. Progress follows the scroll position frame by
 frame, including during touchpad swipes, so it is continuous rather than a
-toggle on focus change.
+toggle on focus change. The blend spans the last quarter of the screen width
+before alignment, and at rest the window is always exactly normal or exactly at
+the edges, so a partly visible full-width neighbor keeps normal gaps.
 
 - The column keeps its normal gapped layout slot: **neighboring columns never
   move**, and nothing re-lays out when you navigate.
