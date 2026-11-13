@@ -102,6 +102,32 @@ fn carry_key(
     }
 }
 
+/// Bindings for this finger count with exactly the held modifiers; if there are none,
+/// `modifiers="any"` bindings for this finger count.
+fn select_candidates(
+    gestures: &[TouchpadGesture],
+    fingers: u32,
+    held: Modifiers,
+    mod_key: ModKey,
+) -> Vec<TouchpadGesture> {
+    let for_fingers = || {
+        gestures
+            .iter()
+            .filter(move |bind| u32::from(bind.fingers) == fingers)
+    };
+    let exact: Vec<_> = for_fingers()
+        .filter(|bind| !bind.any_modifiers && effective_modifiers(bind.modifiers, mod_key) == held)
+        .cloned()
+        .collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+    for_fingers()
+        .filter(|bind| bind.any_modifiers)
+        .cloned()
+        .collect()
+}
+
 fn select_binding(
     candidates: &[TouchpadGesture],
     delta: Point<f64, Logical>,
@@ -154,18 +180,12 @@ impl State {
             });
             return true;
         }
-        let candidates: Vec<_> = self
-            .niri
-            .config
-            .borrow()
-            .touchpad_gestures
-            .iter()
-            .filter(|bind| {
-                u32::from(bind.fingers) == fingers
-                    && effective_modifiers(bind.modifiers, mod_key) == held
-            })
-            .cloned()
-            .collect();
+        let candidates = select_candidates(
+            &self.niri.config.borrow().touchpad_gestures,
+            fingers,
+            held,
+            mod_key,
+        );
         if candidates.is_empty() {
             return false;
         }
@@ -385,6 +405,7 @@ impl State {
                 Operation::Overview
             }
             GestureAction::Run(_) => Operation::Run,
+            GestureAction::Ignore => Operation::Ignored,
         }
     }
 
@@ -520,6 +541,7 @@ mod tests {
             direction,
             threshold: 16.,
             sensitivity: 1.,
+            any_modifiers: false,
             preview_scale: 0.85,
             pickup_distance: 120.,
             drop_duration_ms: 300,
@@ -586,6 +608,58 @@ mod tests {
             ),
             CarryKey::Drop
         );
+    }
+
+    #[test]
+    fn exact_modifier_bindings_take_precedence_over_any() {
+        let mut ignore = binding(Direction::Any);
+        ignore.modifiers = Modifiers::empty();
+        ignore.any_modifiers = true;
+        ignore.action = GestureAction::Ignore;
+        let mut plain = binding(Direction::Horizontal);
+        plain.fingers = 4;
+        plain.modifiers = Modifiers::empty();
+        plain.action = GestureAction::ScrollView;
+        let carry = TouchpadGesture {
+            fingers: 4,
+            action: GestureAction::CarryWindow,
+            ..binding(Direction::Any)
+        };
+        let mut fallback4 = ignore.clone();
+        fallback4.fingers = 4;
+        let all = [
+            ignore.clone(),
+            plain.clone(),
+            carry.clone(),
+            fallback4.clone(),
+        ];
+
+        // Three fingers: always ignored, with or without modifiers.
+        for held in [
+            Modifiers::empty(),
+            Modifiers::SUPER,
+            Modifiers::CTRL | Modifiers::ALT,
+        ] {
+            assert_eq!(
+                select_candidates(&all, 3, held, ModKey::Super),
+                vec![ignore.clone()]
+            );
+        }
+        // Four fingers: exact bindings first, then the "any" fallback.
+        assert_eq!(
+            select_candidates(&all, 4, Modifiers::empty(), ModKey::Super),
+            vec![plain]
+        );
+        assert_eq!(
+            select_candidates(&all, 4, Modifiers::SUPER, ModKey::Super),
+            vec![carry]
+        );
+        assert_eq!(
+            select_candidates(&all, 4, Modifiers::CTRL, ModKey::Super),
+            vec![fallback4]
+        );
+        // Unbound finger counts keep niri's built-in behavior.
+        assert!(select_candidates(&all, 5, Modifiers::empty(), ModKey::Super).is_empty());
     }
 
     #[test]

@@ -224,6 +224,7 @@ where
                     config.touchpad_gestures.retain(|old| {
                         old.fingers != part.fingers
                             || old.modifiers != part.modifiers
+                            || old.any_modifiers != part.any_modifiers
                             || old.direction != part.direction
                     });
                     config.touchpad_gestures.push(part);

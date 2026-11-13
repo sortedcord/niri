@@ -71,6 +71,8 @@ pub enum GestureAction {
     ScrollView,
     SwitchWorkspace,
     Overview,
+    /// Claim the gesture and do nothing: neither a built-in gesture nor the client gets it.
+    Ignore,
     /// Run one ordinary niri action once, after the recognition threshold.
     Run(#[knuffel(children)] Vec<Action>),
 }
@@ -79,6 +81,9 @@ pub enum GestureAction {
 pub struct TouchpadGesture {
     pub fingers: u8,
     pub modifiers: Modifiers,
+    /// `modifiers="any"`: match regardless of held modifiers, as a fallback when no binding
+    /// with the exact held modifiers exists for this finger count.
+    pub any_modifiers: bool,
     pub direction: Direction,
     pub threshold: f64,
     pub sensitivity: f64,
@@ -135,7 +140,8 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for TouchpadGesture {
         if raw.drop_duration_ms > 5000 {
             return Err(error("drop-duration-ms must be between 0 and 5000"));
         }
-        let modifiers = if raw.modifiers.is_empty() {
+        let any_modifiers = raw.modifiers.eq_ignore_ascii_case("any");
+        let modifiers = if raw.modifiers.is_empty() || any_modifiers {
             Modifiers::empty()
         } else {
             // Reuse niri's modifier parser, including its Mod/Super distinction.
@@ -148,7 +154,7 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for TouchpadGesture {
             return Err(error("expected exactly one gesture action"));
         }
         let action = raw.actions.into_iter().next().unwrap();
-        if matches!(action, GestureAction::CarryWindow) && modifiers.is_empty() {
+        if matches!(action, GestureAction::CarryWindow) && (modifiers.is_empty() || any_modifiers) {
             return Err(error(
                 "carry-window requires a modifier to release for dropping",
             ));
@@ -159,6 +165,7 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for TouchpadGesture {
         Ok(Self {
             fingers: raw.fingers,
             modifiers,
+            any_modifiers,
             direction: raw.direction,
             threshold: raw.threshold,
             sensitivity: raw.sensitivity,
@@ -224,6 +231,23 @@ mod tests {
     }
 
     #[test]
+    fn ignore_and_any_modifiers() {
+        let entries = parse(
+            r#"
+            touchpad-gesture fingers=3 modifiers="any" { ignore; }
+            touchpad-gesture fingers=4 modifiers="ANY" direction="vertical" { overview; }
+            touchpad-gesture fingers=4 { scroll-view; }
+        "#,
+        )
+        .unwrap();
+        assert!(entries[0].any_modifiers);
+        assert_eq!(entries[0].modifiers, Modifiers::empty());
+        assert_eq!(entries[0].action, GestureAction::Ignore);
+        assert!(entries[1].any_modifiers);
+        assert!(!entries[2].any_modifiers);
+    }
+
+    #[test]
     fn modifiers_and_defaults() {
         let entries = parse(
             r#"touchpad-gesture fingers=3 modifiers="Mod+Shift" {
@@ -255,6 +279,7 @@ mod tests {
             "touchpad-gesture fingers=3 { run { close-window; quit; }; }",
             "touchpad-gesture fingers=3 { run; }",
             "touchpad-gesture fingers=3 { carry-window; }",
+            "touchpad-gesture fingers=3 modifiers=\"any\" { carry-window; }",
             "touchpad-gesture fingers=3 pickup-distance=0 { drag-window; }",
             "touchpad-gesture fingers=3 pickup-distance=1001 { drag-window; }",
             "touchpad-gesture fingers=3 drop-duration-ms=5001 { drag-window; }",

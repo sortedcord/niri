@@ -115,7 +115,10 @@ touchpad-gesture fingers=3 modifiers="Super" direction="any" threshold=4.0 sensi
   landing, or set it to 0 for instant drop. Range 0–5000 ms.
 
 Other behaviors are `drag-window`, `scroll-view`, `switch-workspace`, `overview`,
-and `run { <one normal niri action>; }`. `carry-window` requires a modifier so it
+`ignore` (claim and do nothing), and `run { <one normal niri action>; }`.
+`modifiers="any"` is a fallback matching any modifiers when no exact binding exists,
+e.g. `touchpad-gesture fingers=3 modifiers="any" { ignore; }` disables three-finger
+swipes. `carry-window` requires a modifier so it
 can commit on release. Defaults remain unchanged if no matching custom binding
 exists. Settings apply to new gestures through niri's normal config reload.
 

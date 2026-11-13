@@ -12,11 +12,24 @@ touchpad-gesture fingers=4 modifiers="Mod+Shift" direction="up" {
 }
 ```
 
+For example, to move all navigation from three to four fingers and disable
+three-finger swipes (and the built-in four-finger overview swipe):
+
+```kdl
+touchpad-gesture fingers=3 modifiers="any" { ignore; }
+touchpad-gesture fingers=4 direction="horizontal" { scroll-view; }
+touchpad-gesture fingers=4 direction="vertical" { switch-workspace; }
+touchpad-gesture fingers=4 modifiers="Super" { carry-window; }
+touchpad-gesture fingers=4 modifiers="any" { ignore; }
+```
+
 `touchpad-gesture` is a repeatable top-level entry:
 
 - `fingers`: required, 3–10. Two-finger scrolling/pinching is not intercepted.
 - `modifiers`: exact initial modifier combination; default `""`. Uses niri's
   modifier names, including `Mod`, `Super`, `Alt`, `Ctrl`, and `Shift`.
+  `modifiers="any"` is a fallback that matches any held modifiers, used only when
+  no binding for that finger count has exactly the held modifiers.
 - `direction`: `any` (default), `horizontal`, `vertical`, `left`, `right`, `up`,
   or `down`, describing physical finger motion before natural scrolling.
 - `threshold`: recognition distance, default 16.0; range 1.0–1000.0 unaccelerated
@@ -59,6 +72,10 @@ Each entry contains exactly one behavior:
 - `switch-workspace`: continuous vertical workspace switching, respecting natural
   scrolling.
 - `overview`: continuous overview control.
+- `ignore`: claim the gesture and do nothing. Neither a built-in gesture nor the
+  focused client receives it. Combine with `modifiers="any"` to disable a finger
+  count entirely, or to remove leftover built-in gestures (such as the four-finger
+  overview swipe, which ignores modifiers) after rebinding.
 - `run { ... }`: one ordinary niri action on successful release after recognition;
   cancelled gestures do not run it.
 
