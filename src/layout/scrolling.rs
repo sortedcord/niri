@@ -3668,6 +3668,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             };
 
             for (tile_idx, tile) in col.tiles.iter_mut().enumerate() {
+                let carried = tile.is_carry_ghost();
                 let win = tile.window_mut();
 
                 let active_in_column = col.active_tile_idx == tile_idx;
@@ -3682,7 +3683,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     // animations when switching tabs.
                     active &= active_in_column || is_tabbed;
                 }
-                win.set_activated(active);
+                // The fixed carried copy keeps client focus while the view pans.
+                win.set_activated(active || carried);
 
                 win.set_interactive_resize(col_resize_data);
 

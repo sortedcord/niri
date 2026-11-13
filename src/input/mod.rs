@@ -56,6 +56,7 @@ use crate::utils::spawning::{spawn, spawn_sh};
 use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 
 pub mod backend_ext;
+pub mod configured_swipe;
 pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
@@ -466,6 +467,11 @@ impl State {
                     } else {
                         return FilterResult::Intercept(None);
                     }
+                }
+
+                if this.carry_keyboard(pressed, raw, modifiers) {
+                    this.niri.suppressed_keys.insert(key_code);
+                    return FilterResult::Intercept(None);
                 }
 
                 if this.niri.exit_confirm_dialog.is_open() && pressed {
@@ -3739,6 +3745,11 @@ impl State {
     }
 
     fn on_gesture_swipe_begin<I: InputBackend>(&mut self, event: I::GestureSwipeBeginEvent) {
+        // Clear any interrupted custom gesture before claiming the new stream.
+        self.configured_swipe_end(true);
+        if self.configured_swipe_begin(event.fingers()) {
+            return;
+        }
         if self.niri.window_mru_ui.is_open() {
             // Don't start swipe gestures while in the MRU.
             return;
@@ -3793,6 +3804,17 @@ impl State {
         let uninverted_delta_y = delta_y;
 
         let device = event.device();
+        let natural_scroll = (&device as &dyn Any)
+            .downcast_ref::<input::Device>()
+            .is_some_and(|device| device.config_scroll_natural_scroll_enabled());
+        if self.configured_swipe_update(
+            delta_x,
+            delta_y,
+            natural_scroll,
+            Duration::from_micros(event.time()),
+        ) {
+            return;
+        }
         if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
             if device.config_scroll_natural_scroll_enabled() {
                 delta_x = -delta_x;
@@ -3896,6 +3918,9 @@ impl State {
     }
 
     fn on_gesture_swipe_end<I: InputBackend>(&mut self, event: I::GestureSwipeEndEvent) {
+        if self.configured_swipe_end(event.cancelled()) {
+            return;
+        }
         self.niri.gesture_swipe_3f_cumulative = None;
 
         let mut handled = false;

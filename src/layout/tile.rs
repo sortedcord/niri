@@ -96,6 +96,11 @@ pub struct Tile<W: LayoutElement> {
     /// The animation of the tile's opacity.
     pub(super) alpha_animation: Option<AlphaAnimation>,
 
+    /// Keep the real tile as a dim, space-reserving ghost during carry mode.
+    carry_ghost: Option<CarryGhost>,
+    /// The live preview is landing; reserve this real tile but do not draw it twice.
+    carry_drop_hidden: bool,
+
     /// Offset during the initial interactive move rubberband.
     pub(super) interactive_move_offset: Point<f64, Logical>,
 
@@ -138,6 +143,21 @@ niri_render_elements! {
 
 pub type TileRenderSnapshot =
     RenderSnapshot<TileRenderElement<GlesRenderer>, TileRenderElement<GlesRenderer>>;
+
+#[derive(Debug)]
+struct CarryGhost {
+    buffer: OffscreenBuffer,
+    opacity: f32,
+}
+
+impl Default for CarryGhost {
+    fn default() -> Self {
+        Self {
+            buffer: OffscreenBuffer::default(),
+            opacity: 1.,
+        }
+    }
+}
 
 #[derive(Debug)]
 struct ResizeAnimation {
@@ -205,6 +225,8 @@ impl<W: LayoutElement> Tile<W> {
             move_x_animation: None,
             move_y_animation: None,
             alpha_animation: None,
+            carry_ghost: None,
+            carry_drop_hidden: false,
             interactive_move_offset: Point::from((0., 0.)),
             unmap_snapshot: None,
             rounded_corner_damage: Default::default(),
@@ -1314,6 +1336,49 @@ impl<W: LayoutElement> Tile<W> {
         );
     }
 
+    pub(super) fn set_carry_drop_hidden(&mut self, hidden: bool) {
+        self.carry_drop_hidden = hidden;
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_carry_drop_hidden(&self) -> bool {
+        self.carry_drop_hidden
+    }
+
+    pub(super) fn set_carry_ghost(&mut self, enabled: bool) {
+        if enabled {
+            self.carry_ghost.get_or_insert_with(CarryGhost::default);
+        } else {
+            self.carry_ghost = None;
+        }
+    }
+
+    pub(super) fn set_carry_ghost_opacity(&mut self, opacity: f32) {
+        if let Some(ghost) = &mut self.carry_ghost {
+            ghost.opacity = opacity.clamp(0., 1.);
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn carry_ghost_opacity(&self) -> Option<f32> {
+        self.carry_ghost.as_ref().map(|ghost| ghost.opacity)
+    }
+
+    pub(super) fn is_carry_ghost(&self) -> bool {
+        self.carry_ghost.is_some()
+    }
+
+    /// Render the live carried copy without the source tile's ghost opacity.
+    pub(super) fn render_carry_preview<R: NiriRenderer>(
+        &self,
+        ctx: RenderCtx<R>,
+        location: Point<f64, Logical>,
+        xray_pos: XrayPos,
+        push: &mut dyn FnMut(TileRenderElement<R>),
+    ) {
+        self.render_inner(ctx, location, xray_pos, true, push);
+    }
+
     pub fn render<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -1323,8 +1388,41 @@ impl<W: LayoutElement> Tile<W> {
         push: &mut dyn FnMut(TileRenderElement<R>),
     ) {
         let _span = tracy_client::span!("Tile::render");
+        if self.carry_drop_hidden {
+            return;
+        }
 
         let scale = Scale::from(self.scale);
+
+        if let Some(ghost) = &self.carry_ghost {
+            let mut ctx = ctx.as_gles();
+            let mut elements = Vec::new();
+            self.render_inner(
+                ctx.r(),
+                Point::new(0., 0.),
+                xray_pos,
+                true,
+                &mut |element| elements.push(element),
+            );
+            match ghost.buffer.render(ctx.renderer, scale, &elements) {
+                Ok((element, _, data)) => {
+                    let offset = element.offset();
+                    // Once the lifted copy is visible, its offscreen data owns
+                    // frame feedback, including when this source scrolls away.
+                    if ghost.opacity >= 1. {
+                        self.window().set_offscreen_data(Some(data));
+                    }
+                    push(
+                        element
+                            .with_alpha(ghost.opacity)
+                            .with_offset(location + offset)
+                            .into(),
+                    );
+                }
+                Err(error) => warn!("error rendering carry ghost: {error:?}"),
+            }
+            return;
+        }
 
         let tile_alpha = self
             .alpha_animation
