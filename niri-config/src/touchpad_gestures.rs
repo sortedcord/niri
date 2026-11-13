@@ -69,6 +69,9 @@ pub enum GestureAction {
     /// Keep a centered copy and source ghost while gestures navigate underneath.
     /// Release the configured modifiers to commit, or Escape to cancel.
     CarryWindow,
+    /// Scroll columns horizontally and switch workspaces vertically from one binding. With
+    /// `lock-axis=false`, both happen in the same swipe.
+    Navigate,
     ScrollView,
     SwitchWorkspace,
     Overview,
@@ -96,6 +99,9 @@ pub struct TouchpadGesture {
     pub preview_scale: f64,
     pub pickup_distance: f64,
     pub drop_duration_ms: u16,
+    /// For `navigate` and `carry-window`: each stroke follows only the axis it starts on
+    /// (`true`, like niri's built-in swipes) or moves freely on both axes (`false`).
+    pub lock_axis: bool,
     pub action: GestureAction,
 }
 
@@ -117,6 +123,8 @@ struct RawGesture {
     pickup_distance: f64,
     #[knuffel(property(name = "drop-duration-ms"), default = 300)]
     drop_duration_ms: u16,
+    #[knuffel(property(name = "lock-axis"), default = true)]
+    lock_axis: bool,
     #[knuffel(children)]
     actions: Vec<GestureAction>,
 }
@@ -165,6 +173,10 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for TouchpadGesture {
                 "carry-window requires a modifier to release for dropping",
             ));
         }
+        if !raw.lock_axis && !matches!(action, GestureAction::Navigate | GestureAction::CarryWindow)
+        {
+            return Err(error("lock-axis only applies to navigate and carry-window"));
+        }
         if matches!(&action, GestureAction::Run(actions) if actions.len() != 1) {
             return Err(error("run must contain exactly one niri action"));
         }
@@ -178,6 +190,7 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for TouchpadGesture {
             preview_scale: raw.preview_scale,
             pickup_distance: raw.pickup_distance,
             drop_duration_ms: raw.drop_duration_ms,
+            lock_axis: raw.lock_axis,
             action,
         })
     }
@@ -296,6 +309,32 @@ mod tests {
         assert_eq!(entries[0].threshold, 16.);
         assert_eq!(entries[0].pickup_distance, 120.);
         assert_eq!(entries[0].drop_duration_ms, 300);
+        assert!(entries[0].lock_axis);
+    }
+
+    #[test]
+    fn navigate_and_lock_axis() {
+        let entries = parse(
+            r#"
+            touchpad-gesture fingers=4 lock-axis=false { navigate; }
+            touchpad-gesture fingers=4 modifiers="Super" lock-axis=false { carry-window; }
+            touchpad-gesture fingers=3 { navigate; }
+        "#,
+        )
+        .unwrap();
+        assert_eq!(entries[0].action, GestureAction::Navigate);
+        assert!(!entries[0].lock_axis);
+        assert!(!entries[1].lock_axis);
+        assert!(entries[2].lock_axis);
+
+        for text in [
+            "touchpad-gesture fingers=4 lock-axis=false { scroll-view; }",
+            "touchpad-gesture fingers=4 lock-axis=false { switch-workspace; }",
+            "touchpad-gesture fingers=4 lock-axis=false { ignore; }",
+            "touchpad-gesture fingers=4 lock-axis=\"no\" { navigate; }",
+        ] {
+            assert!(parse(text).is_err(), "should reject {text}");
+        }
     }
 
     #[test]

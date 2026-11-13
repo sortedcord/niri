@@ -54,6 +54,7 @@ use workspace::{WorkspaceAddWindowTarget, WorkspaceId};
 
 pub use self::monitor::MonitorRenderElement;
 use self::monitor::{Monitor, WorkspaceSwitch};
+pub use self::navigation::Navigation;
 use self::workspace::{OutputId, Workspace};
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
@@ -81,6 +82,7 @@ pub mod floating;
 pub mod focus_ring;
 pub mod insert_hint_element;
 pub mod monitor;
+mod navigation;
 pub mod opening_window;
 pub mod scrolling;
 pub mod shadow;
@@ -1811,6 +1813,15 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn monitor_for_output(&self, output: &Output) -> Option<&Monitor<W>> {
         self.monitors().find(|mon| &mon.output == output)
+    }
+
+    /// Index of the workspace currently nearest the center of `output`, following any ongoing
+    /// workspace switch.
+    pub fn nearest_workspace_idx(&self, output: &Output) -> Option<usize> {
+        let mon = self.monitor_for_output(output)?;
+        let last = mon.workspaces.len().checked_sub(1)?;
+        let idx = mon.workspace_render_idx().round().max(0.) as usize;
+        Some(idx.min(last))
     }
 
     pub fn monitor_for_output_mut(&mut self, output: &Output) -> Option<&mut Monitor<W>> {
@@ -5090,7 +5101,16 @@ impl<W: LayoutElement> Layout<W> {
                             }
                         } else {
                             // Cancel the view offset gesture after workspace switches, moves, etc.
-                            if !self.overview_open && ws_idx != mon.active_workspace_idx {
+                            //
+                            // During a workspace switch gesture, an unlocked-axis swipe may be
+                            // scrolling the columns of the workspace it is moving onto, which is
+                            // not active until the switch ends; leave that one alone.
+                            let switching =
+                                matches!(mon.workspace_switch, Some(WorkspaceSwitch::Gesture(_)));
+                            if !self.overview_open
+                                && ws_idx != mon.active_workspace_idx
+                                && !switching
+                            {
                                 ws.view_offset_gesture_end(None);
                             }
                         }

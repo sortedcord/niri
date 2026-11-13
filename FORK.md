@@ -114,12 +114,16 @@ touchpad-gesture fingers=3 modifiers="Super" direction="any" threshold=4.0 sensi
 - `drop-duration-ms`: landing duration; default 300. Increase it for a slower
   landing, or set it to 0 for instant drop. Range 0–5000 ms.
 
-Other behaviors are `drag-window`, `scroll-view`, `switch-workspace`, `overview`,
+Other behaviors are `drag-window`, `navigate` (columns and workspaces from one
+binding), `scroll-view`, `switch-workspace`, `overview`,
 `ignore` (claim and do nothing), `forward-to-client app-id="REGEX"` (hand the swipe to
 the window under the pointer, below), and `run { <one normal niri action>; }`.
 `modifiers="any"` is a fallback matching any modifiers when no exact binding exists,
 e.g. `touchpad-gesture fingers=3 modifiers="any" { ignore; }` disables three-finger
-swipes. `carry-window` requires a modifier so it
+swipes. `lock-axis=false` on `navigate` or `carry-window` lets one swipe move
+columns and workspaces at the same time instead of locking to the first axis, e.g.
+`touchpad-gesture fingers=4 lock-axis=false { navigate; }`. `carry-window` requires a
+modifier so it
 can commit on release. Defaults remain unchanged if no matching custom binding
 exists. Settings apply to new gestures through niri's normal config reload.
 

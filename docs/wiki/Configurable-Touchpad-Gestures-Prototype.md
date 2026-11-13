@@ -23,6 +23,15 @@ touchpad-gesture fingers=4 modifiers="Super" { carry-window; }
 touchpad-gesture fingers=4 modifiers="any" { ignore; }
 ```
 
+To move freely on both axes within one swipe (columns and workspaces at once),
+replace the two four-finger bindings with a single unlocked `navigate`, and unlock
+the carry strokes too:
+
+```kdl
+touchpad-gesture fingers=4 lock-axis=false { navigate; }
+touchpad-gesture fingers=4 modifiers="Super" lock-axis=false { carry-window; }
+```
+
 `touchpad-gesture` is a repeatable top-level entry:
 
 - `fingers`: required, 3–10. Two-finger scrolling/pinching is not intercepted.
@@ -41,6 +50,12 @@ touchpad-gesture fingers=4 modifiers="any" { ignore; }
   the navigation sensitivity multiplier.
 - `drop-duration-ms`: carry landing duration, default 300; range 0–5000 ms.
   Larger values slow the move/grow transition; zero makes the drop instant.
+- `lock-axis`: for `navigate` and `carry-window`, default `true`. When `true`, each
+  stroke follows only the axis it starts moving along, like niri's built-in swipes.
+  When `false`, one stroke moves on both axes at once: vertical motion switches
+  workspaces while horizontal motion scrolls the columns of whichever workspace is
+  nearest the center (handing over as you pass the midpoint between workspaces).
+  Rejected on other behaviors.
 
 Each entry contains exactly one behavior:
 
@@ -68,6 +83,10 @@ Each entry contains exactly one behavior:
 - `drag-window`: the v1 direct-move behavior. Detach a window, shrink it, move it
   with the fingers, use edge scrolling to navigate, and drop on finger-up. There
   is no source ghost. Cancellation drops at the last valid insertion point.
+- `navigate`: column scrolling (horizontal) and workspace switching (vertical)
+  from one binding, respecting natural scrolling. With the default `lock-axis=true`
+  it behaves like a `scroll-view`/`switch-workspace` pair; with `lock-axis=false`
+  both axes move within the same stroke.
 - `scroll-view`: continuous horizontal scrolling, respecting natural scrolling.
 - `switch-workspace`: continuous vertical workspace switching, respecting natural
   scrolling.

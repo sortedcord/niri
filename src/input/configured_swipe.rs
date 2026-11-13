@@ -14,6 +14,7 @@ use smithay::output::Output;
 use smithay::utils::{IsAlive, Logical, Point};
 
 use super::modifiers_from_state;
+use crate::layout::Navigation;
 use crate::niri::State;
 use crate::utils::{output_size, with_toplevel_role};
 
@@ -63,7 +64,11 @@ enum Operation {
         position: Point<f64, Logical>,
     },
     Carry {
-        horizontal: Option<bool>,
+        navigation: Navigation,
+    },
+    Navigate {
+        navigation: Navigation,
+        output: Output,
     },
     View,
     Workspace,
@@ -318,37 +323,23 @@ impl State {
                         )
                     }
                 }
-                Operation::Carry { horizontal } => {
+                Operation::Carry { navigation: nav } => {
                     self.niri.layout.carry_motion(pickup_motion);
                     if let Some(output) = self.niri.layout.carry_output() {
-                        if horizontal.is_none() {
-                            let x_axis = navigation.x.abs() > navigation.y.abs();
-                            if x_axis {
-                                self.niri
-                                    .layout
-                                    .view_offset_gesture_begin(&output, None, true);
-                            } else {
-                                self.niri
-                                    .layout
-                                    .workspace_switch_gesture_begin(&output, true);
-                            }
-                            *horizontal = Some(x_axis);
-                        }
-                        if *horizontal == Some(true) {
-                            self.niri
-                                .layout
-                                .view_offset_gesture_update(navigation.x, timestamp, true)
-                                .is_some()
-                        } else {
-                            self.niri
-                                .layout
-                                .workspace_switch_gesture_update(navigation.y, timestamp, true)
-                                .is_some()
-                        }
+                        self.niri
+                            .layout
+                            .navigation_update(nav, &output, navigation, timestamp)
                     } else {
                         false
                     }
                 }
+                Operation::Navigate {
+                    navigation: nav,
+                    output,
+                } => self
+                    .niri
+                    .layout
+                    .navigation_update(nav, output, navigation, timestamp),
                 Operation::View => self
                     .niri
                     .layout
@@ -427,7 +418,18 @@ impl State {
                         .cursor_manager
                         .set_cursor_image(CursorImageStatus::Named(CursorIcon::Grabbing));
                 }
-                Operation::Carry { horizontal: None }
+                Operation::Carry {
+                    navigation: Navigation::new(binding.lock_axis),
+                }
+            }
+            GestureAction::Navigate => {
+                let Some(output) = swipe.output.clone() else {
+                    return Operation::Ignored;
+                };
+                Operation::Navigate {
+                    navigation: Navigation::new(binding.lock_axis),
+                    output,
+                }
             }
             GestureAction::ScrollView => {
                 let Some(output) = &swipe.output else {
@@ -468,18 +470,13 @@ impl State {
                     .cursor_manager
                     .set_cursor_image(CursorImageStatus::default_named());
             }
-            Operation::Carry { horizontal } => {
+            Operation::Carry { navigation } => {
                 // Keep carry mode, but smoothly finish any partial lift.
                 self.niri.layout.carry_finish_pickup();
-                match horizontal {
-                    Some(true) => {
-                        self.niri.layout.view_offset_gesture_end(Some(true));
-                    }
-                    Some(false) => {
-                        self.niri.layout.workspace_switch_gesture_end(Some(true));
-                    }
-                    None => (),
-                }
+                self.niri.layout.navigation_end(navigation);
+            }
+            Operation::Navigate { navigation, .. } => {
+                self.niri.layout.navigation_end(navigation);
             }
             Operation::View => {
                 self.niri.layout.view_offset_gesture_end(Some(true));
@@ -594,6 +591,7 @@ mod tests {
             preview_scale: 0.85,
             pickup_distance: 120.,
             drop_duration_ms: 300,
+            lock_axis: true,
             action: GestureAction::DragWindow,
         }
     }

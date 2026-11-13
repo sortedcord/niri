@@ -17,6 +17,7 @@ mod animations;
 mod carry;
 mod fullscreen;
 mod gesture_move;
+mod navigation;
 mod smart_edges;
 
 impl<W: LayoutElement> Default for Layout<W> {
