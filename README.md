@@ -4,7 +4,7 @@
 > **Fork feature branch: configurable touchpad carry gestures.**
 > This branch preserves the tested implementation based on **niri v26.04**, not current upstream main.
 > It adds gesture-driven window pickup, a source ghost, workspace navigation beneath a centered preview,
-> and a configurable smooth landing. See **[FORK.md](FORK.md)** for building, configuration, testing,
+> a configurable smooth landing, and native scroll-driven smart borders (`full-width-to-edges`). See **[FORK.md](FORK.md)** for building, configuration, testing,
 > and limitations. This feature is experimental; the upstream information below is retained for reference.
 
 <p align="center">

@@ -396,7 +396,26 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             || !self.closing_windows.is_empty()
     }
 
+    /// Blends each eligible full-width tile toward the screen edges by how close its column is to
+    /// being aligned in view. Purely visual: column geometry is unchanged.
+    pub fn update_smart_edges_progress(&mut self) {
+        let view_pos = self.view_pos();
+        let gaps = self.options.layout.gaps;
+        let aligned_x = self.working_area.loc.x + gaps;
+        for (col, col_x) in self.columns_mut() {
+            let screen_x = col_x - view_pos + col.render_offset().x;
+            let travel = f64::max(1., col.width() + gaps);
+            let visible = 1. - ((screen_x - aligned_x).abs() / travel).clamp(0., 1.);
+            // Smoothstep: no velocity discontinuity at either end of the blend.
+            let progress = visible * visible * (3. - 2. * visible);
+            for tile in &mut col.tiles {
+                tile.set_smart_edges_progress(progress);
+            }
+        }
+    }
+
     pub fn update_render_elements(&mut self, is_active: bool) {
+        self.update_smart_edges_progress();
         let view_pos = Point::from((self.view_pos(), 0.));
         let view_size = self.view_size;
         let active_idx = self.active_column_idx;
@@ -1059,8 +1078,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         // If this is the only tile in the column, remove the whole column.
         if self.columns[column_idx].tiles.len() == 1 {
             let mut column = self.remove_column_by_idx(column_idx, anim_config);
+            let mut tile = column.tiles.remove(tile_idx);
+            // The tile no longer has a column slot. Wherever it goes next (floating, another
+            // column) re-decides eligibility; eligible columns re-request the edges.
+            tile.clear_edges();
             return RemovedTile {
-                tile: column.tiles.remove(tile_idx),
+                tile,
                 width: column.width,
                 is_full_width: column.is_full_width,
                 is_floating: false,
@@ -4421,6 +4444,7 @@ impl<W: LayoutElement> Column<W> {
         let sizing_mode = self.pending_sizing_mode();
         if matches!(sizing_mode, SizingMode::Fullscreen | SizingMode::Maximized) {
             for (tile_idx, tile) in self.tiles.iter_mut().enumerate() {
+                tile.leave_edges();
                 // In tabbed mode, only the visible window participates in the transaction.
                 let is_active = tile_idx == self.active_tile_idx;
                 let transaction = if self.display_mode == ColumnDisplay::Tabbed && !is_active {
@@ -4692,6 +4716,11 @@ impl<W: LayoutElement> Column<W> {
             assert_eq!(auto_tiles_left, 0);
         }
 
+        let smart_edges = heights.first().and_then(|h| match h {
+            WindowHeight::Fixed(height) => self.smart_edges_rect(Size::from((width, *height))),
+            _ => None,
+        });
+
         for (tile_idx, (tile, h)) in zip(&mut self.tiles, heights).enumerate() {
             let WindowHeight::Fixed(height) = h else {
                 unreachable!()
@@ -4707,8 +4736,53 @@ impl<W: LayoutElement> Column<W> {
                 Some(transaction.clone())
             };
 
-            tile.request_tile_size(size, animate, transaction);
+            if let Some(edges) = smart_edges {
+                tile.request_edges_size(size, edges, animate, transaction);
+            } else {
+                tile.leave_edges();
+                tile.request_tile_size(size, animate, transaction);
+            }
         }
+    }
+
+    /// Edge rectangle for an eligible single-window full-width column, in tile-local coordinates
+    /// relative to the tile's position when the column is aligned at the working area's left gap.
+    fn smart_edges_rect(&self, tile_size: Size<f64, Logical>) -> Option<Rectangle<f64, Logical>> {
+        if !self.options.layout.full_width_to_edges
+            || self.tiles.len() != 1
+            || self.display_mode != ColumnDisplay::Normal
+            || !self.pending_sizing_mode().is_normal()
+        {
+            return None;
+        }
+
+        let full_width =
+            self.is_full_width || matches!(self.width, ColumnWidth::Proportion(p) if p >= 1.);
+        if !full_width {
+            return None;
+        }
+
+        let edges_size = self.parent_area.size;
+        // Respect windows that cannot grow to the edges (fixed-size dialogs and the like).
+        let tile = &self.tiles[0];
+        let max = tile.window().max_size();
+        let min = tile.window().min_size();
+        if (max.w > 0 && f64::from(max.w) < edges_size.w)
+            || (max.h > 0 && f64::from(max.h) < edges_size.h)
+            || f64::from(min.w) > edges_size.w
+            || f64::from(min.h) > edges_size.h
+            || tile_size.w <= 0.
+            || tile_size.h <= 0.
+        {
+            return None;
+        }
+
+        let gaps = self.options.layout.gaps;
+        let aligned = Point::from((
+            self.working_area.loc.x + gaps,
+            self.working_area.loc.y + gaps,
+        ));
+        Some(Rectangle::new(self.parent_area.loc - aligned, edges_size))
     }
 
     fn width(&self) -> f64 {
@@ -5414,8 +5488,11 @@ impl<W: LayoutElement> Column<W> {
             }
 
             let requested_size = tile.window().requested_size().unwrap();
-            let requested_tile_height =
-                tile.tile_height_for_window_height(f64::from(requested_size.h));
+            let requested_tile_height = match tile.smart_edges().filter(|smart| !smart.leaving) {
+                // Edge-expanded windows are intentionally larger than their layout slot.
+                Some(smart) => smart.slot.h,
+                None => tile.tile_height_for_window_height(f64::from(requested_size.h)),
+            };
             let min_tile_height = f64::max(1., tile.min_size_nonfullscreen().h);
 
             if !is_tabbed

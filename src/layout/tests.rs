@@ -17,6 +17,7 @@ mod animations;
 mod carry;
 mod fullscreen;
 mod gesture_move;
+mod smart_edges;
 
 impl<W: LayoutElement> Default for Layout<W> {
     fn default() -> Self {
@@ -3922,6 +3923,7 @@ prop_compose! {
         center_focused_column in prop::option::of(arbitrary_center_focused_column()),
         always_center_single_column in prop::option::of(any::<bool>().prop_map(Flag)),
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
+        full_width_to_edges in prop::option::of(any::<bool>().prop_map(Flag)),
     ) -> niri_config::LayoutPart {
         niri_config::LayoutPart {
             gaps,
@@ -3929,6 +3931,7 @@ prop_compose! {
             center_focused_column,
             always_center_single_column,
             empty_workspace_above_first,
+            full_width_to_edges,
             focus_ring,
             border,
             shadow,

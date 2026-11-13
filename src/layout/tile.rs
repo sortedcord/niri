@@ -101,6 +101,11 @@ pub struct Tile<W: LayoutElement> {
     /// The live preview is landing; reserve this real tile but do not draw it twice.
     carry_drop_hidden: bool,
 
+    /// Edge-to-edge geometry for a single-window full-width column.
+    smart_edges: Option<SmartEdges>,
+    /// Offscreen buffer for presenting the window between its slot and the edges.
+    smart_edges_offscreen: OffscreenBuffer,
+
     /// Offset during the initial interactive move rubberband.
     pub(super) interactive_move_offset: Point<f64, Logical>,
 
@@ -143,6 +148,28 @@ niri_render_elements! {
 
 pub type TileRenderSnapshot =
     RenderSnapshot<TileRenderElement<GlesRenderer>, TileRenderElement<GlesRenderer>>;
+
+/// A tile whose window is sized to the screen edges, while its layout slot keeps normal gaps.
+///
+/// `progress` blends the visual window rectangle between the gapped slot (0) and the edges (1);
+/// the layout always uses `slot`, so neighboring columns never move.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct SmartEdges {
+    /// Tile size used by the layout (including any border), as if the column were not expanded.
+    pub slot: Size<f64, Logical>,
+    /// Edge rectangle in tile-local coordinates, relative to the tile's aligned position.
+    pub edges: Rectangle<f64, Logical>,
+    pub progress: f64,
+    /// The column is no longer eligible; keep the slot until the client commits a new size.
+    pub leaving: bool,
+}
+
+impl SmartEdges {
+    /// Whether a window of `size` has adopted the edge-to-edge size.
+    fn fits(&self, size: Size<f64, Logical>) -> bool {
+        (size.w - self.edges.size.w).abs() < 1. && (size.h - self.edges.size.h).abs() < 1.
+    }
+}
 
 #[derive(Debug)]
 struct CarryGhost {
@@ -227,6 +254,8 @@ impl<W: LayoutElement> Tile<W> {
             alpha_animation: None,
             carry_ghost: None,
             carry_drop_hidden: false,
+            smart_edges: None,
+            smart_edges_offscreen: OffscreenBuffer::default(),
             interactive_move_offset: Point::from((0., 0.)),
             unmap_snapshot: None,
             rounded_corner_damage: Default::default(),
@@ -287,6 +316,16 @@ impl<W: LayoutElement> Tile<W> {
         let prev_sizing_mode = self.sizing_mode;
         self.sizing_mode = self.window.sizing_mode();
 
+        // The window was sized to the edges; its layout tile size was the slot. Animate any resize
+        // from that slot rather than from the oversized edge-to-edge window size.
+        let prev_smart = self.smart_edges;
+        if let Some(smart) = self.smart_edges {
+            let at_edges = smart.fits(self.window.size().to_f64());
+            if smart.leaving && (!at_edges || !self.sizing_mode.is_normal()) {
+                self.smart_edges = None;
+            }
+        }
+
         if let Some(animate_from) = self.window.take_animation_snapshot() {
             let params = if let Some(resize) = self.resize_animation.take() {
                 // Compute like in animated_window_size(), but using the snapshot geometry (since
@@ -304,6 +343,10 @@ impl<W: LayoutElement> Tile<W> {
                 if prev_sizing_mode.is_fullscreen() {
                     tile_size.w = f64::max(tile_size.w, self.view_size.w);
                     tile_size.h = f64::max(tile_size.h, self.view_size.h);
+                } else if let Some(smart) = prev_smart
+                    .filter(|smart| prev_sizing_mode.is_normal() && smart.fits(animate_from.size))
+                {
+                    tile_size = smart.slot;
                 } else if prev_sizing_mode.is_normal() && !self.border.is_off() {
                     let width = self.border.width();
                     tile_size.w += width * 2.;
@@ -343,6 +386,10 @@ impl<W: LayoutElement> Tile<W> {
                 if prev_sizing_mode.is_fullscreen() {
                     tile_size.w = f64::max(tile_size.w, self.view_size.w);
                     tile_size.h = f64::max(tile_size.h, self.view_size.h);
+                } else if let Some(smart) =
+                    prev_smart.filter(|smart| prev_sizing_mode.is_normal() && smart.fits(size))
+                {
+                    tile_size = smart.slot;
                 } else if prev_sizing_mode.is_normal() && !self.border.is_off() {
                     let width = self.border.width();
                     tile_size.w += width * 2.;
@@ -712,7 +759,7 @@ impl<W: LayoutElement> Tile<W> {
         }
     }
 
-    fn expanded_progress(&self) -> f64 {
+    pub(super) fn expanded_progress(&self) -> f64 {
         if let Some(resize) = &self.resize_animation {
             if let Some(anim) = &resize.expanded_progress {
                 return anim.clamped_value().clamp(0., 1.);
@@ -720,10 +767,127 @@ impl<W: LayoutElement> Tile<W> {
         }
 
         if self.sizing_mode.is_normal() {
-            0.
+            self.smart_edges_progress()
         } else {
             1.
         }
+    }
+
+    /// Visual progress toward the edges for an eligible full-width tile, or 0.
+    fn smart_edges_progress(&self) -> f64 {
+        self.active_smart_edges()
+            .map_or(0., |smart| smart.progress.clamp(0., 1.))
+    }
+
+    /// Edge geometry, once the client has actually committed the edge-to-edge size.
+    ///
+    /// Until then the tile behaves normally, exactly like any other pending resize, which keeps
+    /// layout data consistent with committed sizes.
+    fn active_smart_edges(&self) -> Option<SmartEdges> {
+        self.smart_edges
+            .filter(|smart| self.sizing_mode.is_normal() && smart.fits(self.window_size()))
+    }
+
+    /// Requests a window size equal to the screen edges while keeping `slot` as the layout size.
+    pub(super) fn request_edges_size(
+        &mut self,
+        slot: Size<f64, Logical>,
+        edges: Rectangle<f64, Logical>,
+        animate: bool,
+        transaction: Option<Transaction>,
+    ) {
+        let progress = self.smart_edges.map_or(0., |smart| smart.progress);
+        self.smart_edges = Some(SmartEdges {
+            slot,
+            edges,
+            progress,
+            leaving: false,
+        });
+        self.window.request_size(
+            edges.size.to_i32_round(),
+            SizingMode::Normal,
+            animate,
+            transaction,
+        );
+    }
+
+    /// Marks the tile as no longer edge-eligible. The slot is retained until the next commit so
+    /// that the column does not momentarily grow to the oversized edge-to-edge window size.
+    pub(super) fn leave_edges(&mut self) {
+        if let Some(smart) = &mut self.smart_edges {
+            smart.leaving = true;
+        }
+    }
+
+    /// Drops edge-to-edge mode immediately, e.g. when the tile leaves its column.
+    pub(super) fn clear_edges(&mut self) {
+        self.smart_edges = None;
+    }
+
+    pub(super) fn set_smart_edges_progress(&mut self, progress: f64) {
+        if let Some(smart) = &mut self.smart_edges {
+            if !smart.leaving {
+                smart.progress = progress.clamp(0., 1.);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn smart_edges(&self) -> Option<SmartEdges> {
+        self.smart_edges
+    }
+
+    /// The window's visual rectangle within the tile and its presentation scale.
+    ///
+    /// At progress 0, the window fills the normal gapped slot (inside any border); at 1, it is
+    /// drawn at its actual size, centered on the edge rectangle.
+    pub(super) fn smart_edges_window_rect(&self) -> Option<(Rectangle<f64, Logical>, Scale<f64>)> {
+        let smart = self.active_smart_edges()?;
+
+        let window = self.window_size();
+        if window.w <= 0. || window.h <= 0. {
+            return None;
+        }
+
+        let border = if self.border.is_off() {
+            0.
+        } else {
+            self.border.width()
+        };
+        let from: Rectangle<f64, Logical> = Rectangle::new(
+            Point::from((border, border)),
+            Size::from((
+                f64::max(1., smart.slot.w - border * 2.),
+                f64::max(1., smart.slot.h - border * 2.),
+            )),
+        );
+        let to = Rectangle::new(
+            smart.edges.loc
+                + Point::from((
+                    (smart.edges.size.w - window.w) / 2.,
+                    (smart.edges.size.h - window.h) / 2.,
+                )),
+            window,
+        );
+
+        let p = smart.progress.clamp(0., 1.);
+        let lerp = |a: f64, b: f64| a + (b - a) * p;
+        let rect = Rectangle::new(
+            Point::from((lerp(from.loc.x, to.loc.x), lerp(from.loc.y, to.loc.y))),
+            Size::from((lerp(from.size.w, to.size.w), lerp(from.size.h, to.size.h))),
+        );
+        let scale = Scale::from((rect.size.w / window.w, rect.size.h / window.h));
+        Some((rect, scale))
+    }
+
+    /// Presentation scale if the window must be drawn scaled; `None` when drawn 1:1.
+    pub(super) fn smart_edges_render_scale(&self) -> Option<(Point<f64, Logical>, Scale<f64>)> {
+        if self.resize_animation.is_some() {
+            return None;
+        }
+        let (rect, scale) = self.smart_edges_window_rect()?;
+        let identity = (scale.x - 1.).abs() < 1e-4 && (scale.y - 1.).abs() < 1e-4;
+        (!identity).then_some((rect.loc, scale))
     }
 
     /// Returns `None` if the border is hidden and `Some(width)` if it should be shown.
@@ -760,6 +924,19 @@ impl<W: LayoutElement> Tile<W> {
 
     /// Returns the location of the window's visual geometry within this Tile.
     pub fn window_loc(&self) -> Point<f64, Logical> {
+        if let Some((rect, _)) = self.smart_edges_window_rect() {
+            let loc = if self.resize_animation.is_some() {
+                // During a client resize, draw the animated size centered in the blended rect.
+                let size = self.animated_window_size();
+                rect.loc + Point::from(((rect.size.w - size.w) / 2., (rect.size.h - size.h) / 2.))
+            } else {
+                rect.loc
+            };
+            return loc
+                .to_physical_precise_round(self.scale)
+                .to_logical(self.scale);
+        }
+
         let mut loc = Point::from((0., 0.));
 
         let window_size = self.animated_window_size();
@@ -795,6 +972,10 @@ impl<W: LayoutElement> Tile<W> {
             return size;
         }
 
+        if let Some(smart) = self.active_smart_edges() {
+            return smart.slot;
+        }
+
         if let Some(width) = self.effective_border_width() {
             size.w += width * 2.;
             size.h += width * 2.;
@@ -812,6 +993,13 @@ impl<W: LayoutElement> Tile<W> {
             size.w = f64::max(size.w, self.view_size.w);
             size.h = f64::max(size.h, self.view_size.h);
             return size;
+        }
+
+        if let Some(smart) = self
+            .smart_edges
+            .filter(|smart| self.sizing_mode.is_normal() && smart.fits(size))
+        {
+            return smart.slot;
         }
 
         if let Some(width) = self.effective_border_width() {
@@ -893,9 +1081,18 @@ impl<W: LayoutElement> Tile<W> {
         }
     }
 
-    fn is_in_input_region(&self, mut point: Point<f64, Logical>) -> bool {
-        point -= self.window_loc().to_f64();
-        self.window.is_in_input_region(point)
+    /// Maps a tile-local point into window-geometry-local coordinates.
+    pub(super) fn tile_to_window_point(&self, point: Point<f64, Logical>) -> Point<f64, Logical> {
+        let mut point = point - self.window_loc();
+        if let Some((_, scale)) = self.smart_edges_render_scale() {
+            point = Point::from((point.x / scale.x, point.y / scale.y));
+        }
+        point
+    }
+
+    fn is_in_input_region(&self, point: Point<f64, Logical>) -> bool {
+        self.window
+            .is_in_input_region(self.tile_to_window_point(point))
     }
 
     fn is_in_activation_region(&self, point: Point<f64, Logical>) -> bool {
@@ -908,7 +1105,7 @@ impl<W: LayoutElement> Tile<W> {
         let point = point - offset;
 
         if self.is_in_input_region(point) {
-            let win_pos = self.buf_loc() + offset;
+            let win_pos = self.input_buffer_origin(point) + offset;
             Some(HitType::Input { win_pos })
         } else if self.is_in_activation_region(point) {
             Some(HitType::Activate {
@@ -916,6 +1113,20 @@ impl<W: LayoutElement> Tile<W> {
             })
         } else {
             None
+        }
+    }
+
+    /// Tile-local buffer origin for delivering input at `point`.
+    ///
+    /// For a window presented scaled between its slot and the edges, the origin is chosen so that
+    /// this exact point maps to the scaled content. Pointer motion re-runs hit testing, keeping the
+    /// mapping exact as the pointer moves.
+    pub(super) fn input_buffer_origin(&self, point: Point<f64, Logical>) -> Point<f64, Logical> {
+        if self.smart_edges_render_scale().is_some() {
+            let window_point = self.tile_to_window_point(point);
+            point - window_point + self.window.buf_loc().to_f64()
+        } else {
+            self.buf_loc()
         }
     }
 
@@ -1182,6 +1393,62 @@ impl<W: LayoutElement> Tile<W> {
                 );
                 push(elem.into());
                 pushed_resize = true;
+            }
+        }
+
+        // Edge-to-edge blending: the window is sized to the edges, but presented scaled into a
+        // rectangle between its gapped slot and the edges, driven by scroll position.
+        if !pushed_resize {
+            if let Some((_, stretch)) = self.smart_edges_render_scale() {
+                // Use the same pixel-rounded origin as hit testing.
+                let loc = window_loc;
+                let mut gles = ctx.as_gles();
+                let geo = Rectangle::from_size(window_size);
+                let radius = radius.fit_to(window_size.w as f32, window_size.h as f32);
+                let clip_shader = ClippedSurfaceRenderElement::shader(gles.renderer).cloned();
+                let mut elements: Vec<TileRenderElement<GlesRenderer>> = Vec::new();
+                self.window.render_normal(
+                    gles.r(),
+                    Point::from((0., 0.)),
+                    scale,
+                    1.,
+                    &mut |elem| match elem {
+                        LayoutElementRenderElement::Wayland(elem) => {
+                            if let Some(shader) = clip_shader.clone().filter(|_| clip_to_geometry) {
+                                if ClippedSurfaceRenderElement::will_clip(&elem, scale, geo, radius)
+                                {
+                                    elements.push(
+                                        ClippedSurfaceRenderElement::new(
+                                            elem, scale, geo, shader, radius,
+                                        )
+                                        .into(),
+                                    );
+                                    return;
+                                }
+                            }
+                            elements.push(LayoutElementRenderElement::Wayland(elem).into());
+                        }
+                        other => elements.push(other.into()),
+                    },
+                );
+
+                match self
+                    .smart_edges_offscreen
+                    .render(gles.renderer, scale, &elements)
+                {
+                    Ok((elem, _sync, data)) => {
+                        let offset = elem.offset();
+                        let offset = Point::from((offset.x * stretch.x, offset.y * stretch.y));
+                        self.window.set_offscreen_data(Some(data));
+                        let elem = elem
+                            .with_stretch(stretch)
+                            .with_alpha(win_alpha)
+                            .with_offset(location + loc + offset);
+                        push(elem.into());
+                        pushed_resize = true;
+                    }
+                    Err(err) => warn!("error rendering edge-to-edge blend: {err:?}"),
+                }
             }
         }
 

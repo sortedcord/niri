@@ -18,6 +18,9 @@ and personal desktop configuration are not included.
 - Optional direct window dragging, or the centered **carry-window** interaction.
 - Gesture-driven pickup progress, smooth completion after pausing, a preserved
   source slot, modifier-release drop, Escape cancellation, and smooth landing.
+- **Native smart borders** (`layout { full-width-to-edges }`): single-window
+  full-width columns blend continuously to the screen edges as they scroll into
+  view, replacing external maximize/unmaximize toggling. See below.
 - Configuration validation, lifecycle cleanup, and regression/property coverage.
 
 ### Super + three-finger carry
@@ -37,6 +40,40 @@ and personal desktop configuration are not included.
 Ordinary unmodified gestures retain niri's defaults unless explicitly rebound.
 The carried app retains focus; ordinary keyboard presses are consumed during
 carry mode so they do not type into or move background windows.
+
+### Native smart borders: `full-width-to-edges`
+
+```kdl
+layout {
+    full-width-to-edges
+}
+```
+
+A normal column that is full width (for example after `maximize-column`, Mod+F)
+and contains exactly one tiled window expands that window to the edges of the
+available area as the column scrolls into its aligned position. Gaps, border,
+focus ring, shadow, and rounded corners fade out; the bar stays visible.
+Scrolling away blends it back. Progress follows the scroll position frame by
+frame, including during touchpad swipes, so it is continuous rather than a
+toggle on focus change.
+
+- The column keeps its normal gapped layout slot: **neighboring columns never
+  move**, and nothing re-lays out when you navigate.
+- The window is asked for the edge-to-edge size **once**, when the column becomes
+  eligible, and is not resized while navigating. This removes the configure churn
+  and resize jank of an external helper toggling maximize-to-edges.
+- Mid-scroll, the window is presented scaled by a few percent between the two
+  rectangles (slightly softer while moving); when aligned, it is drawn 1:1.
+  Pointer input maps through the presented geometry.
+- Stacked/tabbed columns, floating, fullscreen, and maximized-to-edges windows are
+  unaffected; windows whose max size is smaller than the edges are left alone.
+  Leaving eligibility keeps the slot until the client commits its new size, so
+  the column never momentarily widens. The option is off by default and can be
+  set per output/workspace through normal layout overrides.
+- The blend follows horizontal scrolling only, and also applies in the overview.
+
+This supersedes the earlier external smart-border service; disable that service
+when using this build.
 
 ## Build this branch
 
@@ -119,6 +156,12 @@ other touchpads, display scales, drivers, and applications.
 cargo test --all --locked
 RUN_SLOW_TESTS=1 PROPTEST_CASES=1000 cargo test -p niri --lib layout::tests::random_operations_dont_panic --locked -- --exact
 ```
+
+Smart-border tests cover edge sizing with an unchanged slot, identical neighbor
+positions with/without the option, continuous blending while scrolling, restoring
+on return without client resizes, eligibility rules, leaving full width, stacking,
+fullscreen, floating, moving between workspaces, and exact pointer mapping
+through the scaled presentation. Randomized layout tests include the option.
 
 The tests include recognition/config parsing, modifier release, continuous
 pickup, idle completion, source-slot preservation, insertion anchors, landing

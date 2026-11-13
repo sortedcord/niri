@@ -13,6 +13,16 @@ layout {
     gaps 16
     default-column-width { proportion 0.5; }
     focus-ring { width 4; active-color "#8698df"; }
+
+    // Native smart borders: single-window full-width columns (Mod+F) blend to the screen
+    // edges as they scroll into view, and back to normal gaps as they scroll away.
+    full-width-to-edges
+}
+
+// Rounded corners make the blend visible: they square off as the window reaches the edges.
+window-rule {
+    geometry-corner-radius 12
+    clip-to-geometry true
 }
 
 include "gestures.kdl"
