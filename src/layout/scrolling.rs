@@ -49,6 +49,10 @@ pub struct ScrollingSpace<W: LayoutElement> {
     /// Ongoing interactive resize.
     interactive_resize: Option<InteractiveResize<W>>,
 
+    /// Set when a window carry gesture left the view resting past the first (`Some(false)`) or
+    /// last (`Some(true)`) column; it returns to that column once the carry ends.
+    edge_overscrolled: Option<bool>,
+
     /// Offset of the view computed from the active column.
     ///
     /// Any gaps, including left padding from work area left exclusive zone, is handled
@@ -136,6 +140,8 @@ pub(super) struct ViewGesture {
     stationary_view_offset: f64,
     /// Whether the gesture is controlled by the touchpad.
     is_touchpad: bool,
+    /// Whether the gesture may come to rest past the first or last column (window carry).
+    edge_overscroll: bool,
 
     // If this gesture is for drag-and-drop scrolling, this is the last event's unadjusted
     // timestamp.
@@ -304,6 +310,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             view_offset: ViewOffset::Static(0.),
             activate_prev_column_on_removal: None,
             view_offset_to_restore: None,
+            edge_overscrolled: None,
             closing_windows: Vec::new(),
             view_size,
             working_area,
@@ -727,6 +734,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         new_view_offset: f64,
         config: niri_config::Animation,
     ) {
+        self.edge_overscrolled = None;
+
         let new_col_x = self.column_x(idx);
         let old_col_x = self.column_x(self.active_column_idx);
         let offset_delta = old_col_x - new_col_x;
@@ -3065,6 +3074,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             delta_from_tracker: self.view_offset.current(),
             stationary_view_offset: self.view_offset.stationary(),
             is_touchpad,
+            edge_overscroll: false,
             dnd_last_event_time: None,
             dnd_nonzero_start_time: None,
         };
@@ -3088,12 +3098,57 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             delta_from_tracker: self.view_offset.current(),
             stationary_view_offset: self.view_offset.stationary(),
             is_touchpad: false,
+            edge_overscroll: false,
             dnd_last_event_time: Some(self.clock.now_unadjusted()),
             dnd_nonzero_start_time: None,
         };
         self.view_offset = ViewOffset::Gesture(gesture);
 
         self.interactive_resize = None;
+    }
+
+    /// Lets the ongoing view gesture also come to rest with the empty space before the first or
+    /// after the last column at the middle of the view, so a carried window (held at the
+    /// center) can be dropped there.
+    pub fn view_offset_gesture_allow_edge_overscroll(&mut self) {
+        if let ViewOffset::Gesture(gesture) = &mut self.view_offset {
+            gesture.edge_overscroll = true;
+        }
+    }
+
+    /// Returns the view to the active column if a carry gesture left it past an edge, and
+    /// stops an ongoing gesture from coming to rest there.
+    pub fn settle_edge_overscroll(&mut self) {
+        if let ViewOffset::Gesture(gesture) = &mut self.view_offset {
+            gesture.edge_overscroll = false;
+        }
+        let Some(after_last) = self.edge_overscrolled.take() else {
+            return;
+        };
+        if self.columns.is_empty() || self.view_offset.is_gesture() {
+            return;
+        }
+        // Align the edge column with the view edge it came from, like the normal outermost
+        // snap, rather than the minimal motion that would leave a wide column on the far side.
+        let gaps = self.options.layout.gaps;
+        let (idx, from_x) = if after_last {
+            let idx = self.columns.len() - 1;
+            (idx, self.column_x(idx + 1) - self.view_size.w)
+        } else {
+            (0, -gaps)
+        };
+        let prev_idx = self.active_column_idx;
+        let new_view_offset = self.compute_new_view_offset_for_column(Some(from_x), idx, None);
+        self.animate_view_offset_with_config(
+            idx,
+            new_view_offset,
+            self.options.animations.horizontal_view_movement.0,
+        );
+        if prev_idx != idx {
+            self.active_column_idx = idx;
+            self.activate_prev_column_on_removal = None;
+            self.view_offset_to_restore = None;
+        }
     }
 
     pub fn view_offset_gesture_update(
@@ -3241,9 +3296,28 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             view_pos: f64,
             // Column to activate for this snapping point.
             col_idx: usize,
+            // Whether this rests past the first (`Some(false)`) or last (`Some(true)`) column.
+            edge: Option<bool>,
         }
 
         let mut snapping_points = Vec::new();
+
+        if gesture.edge_overscroll {
+            // Center the gap before the first column or after the last one, nudged by half a gap
+            // further out so the view center is unambiguously beyond the edge.
+            let gaps = self.options.layout.gaps;
+            let half_view = self.view_size.w / 2.;
+            snapping_points.push(Snap {
+                view_pos: -gaps - half_view,
+                col_idx: 0,
+                edge: Some(false),
+            });
+            snapping_points.push(Snap {
+                view_pos: self.column_x(self.columns.len()) - half_view,
+                col_idx: self.columns.len() - 1,
+                edge: Some(true),
+            });
+        }
 
         if self.is_centering_focused_column() {
             let mut col_x = 0.;
@@ -3266,7 +3340,11 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 } else {
                     col_x - (area.size.w - col_w) / 2. - left_strut
                 };
-                snapping_points.push(Snap { view_pos, col_idx });
+                snapping_points.push(Snap {
+                    view_pos,
+                    col_idx,
+                    edge: None,
+                });
 
                 col_x += col_w + self.options.layout.gaps;
             }
@@ -3378,10 +3456,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             snapping_points.push(Snap {
                 view_pos: leftmost_snap,
                 col_idx: 0,
+                edge: None,
             });
             snapping_points.push(Snap {
                 view_pos: rightmost_snap,
                 col_idx: last_col_idx,
+                edge: None,
             });
 
             let mut push = |col_idx, left, right| {
@@ -3389,6 +3469,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     snapping_points.push(Snap {
                         view_pos: left,
                         col_idx,
+                        edge: None,
                     });
                 }
 
@@ -3397,6 +3478,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     snapping_points.push(Snap {
                         view_pos: right,
                         col_idx,
+                        edge: None,
                     });
                 }
             };
@@ -3428,8 +3510,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .unwrap();
 
         let mut new_col_idx = target_snap.col_idx;
+        let edge = target_snap.edge;
 
-        if !self.is_centering_focused_column() {
+        if !self.is_centering_focused_column() && edge.is_none() {
             // Focus the furthest window towards the direction of the gesture.
             if target_view_offset >= current_view_offset {
                 for col_idx in (new_col_idx + 1)..self.columns.len() {
@@ -3519,6 +3602,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             velocity,
             self.options.animations.horizontal_view_movement.0,
         ));
+
+        if edge.is_some() {
+            // Rest past the edge; the fit-the-column correction below would pull the view back.
+            self.edge_overscrolled = edge;
+            return true;
+        }
 
         // HACK: deal with things like snapping to the right edge of a larger-than-view window.
         self.animate_view_offset_to_column(None, new_col_idx, None);

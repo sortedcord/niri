@@ -68,7 +68,10 @@ Each entry contains exactly one behavior:
   configured window-movement animation. Resuming motion during this completion
   continues from the current progress without a backward jump. Requires a
   modifier. Lifting fingers ends only the navigation stroke; more matching-finger
-  strokes can follow while the modifier remains held. Releasing any required
+  strokes can follow while the modifier remains held. Column strokes can also come
+  to rest past the first or last column, with the empty space beyond it at screen
+  center, so the copy can be dropped before the first or after the last column;
+  once the carry ends, such a view returns to its edge column. Releasing any required
   modifier commits the screen-center insertion preview, then the lifted copy
   moves and grows into that slot over `drop-duration-ms`. The real tile is hidden
   during this landing to avoid duplication; the endpoint follows its actual

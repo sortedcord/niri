@@ -3763,6 +3763,10 @@ impl<W: LayoutElement> Layout<W> {
         workspace_idx: Option<usize>,
         is_touchpad: bool,
     ) {
+        // While carrying, the view may also rest past the first or last column so the window
+        // can be dropped there.
+        let edge_overscroll = self.carry.is_some();
+
         let monitors = match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => monitors,
             MonitorSet::NoOutputs { .. } => unreachable!(),
@@ -3779,6 +3783,9 @@ impl<W: LayoutElement> Layout<W> {
                 }
 
                 ws.view_offset_gesture_begin(is_touchpad);
+                if edge_overscroll {
+                    ws.view_offset_gesture_allow_edge_overscroll();
+                }
             }
         }
     }

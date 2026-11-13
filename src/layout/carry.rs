@@ -268,6 +268,18 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn carry_end_with_duration(&mut self, cancel: bool, duration_ms: u16) {
+        if self.carry.is_none() {
+            return;
+        }
+        self.carry_end_inner(cancel, duration_ms);
+        // Views left past an edge go back to their active column, unless the drop already
+        // moved them (e.g. to focus the dropped window).
+        for ws in self.workspaces_mut() {
+            ws.settle_edge_overscroll();
+        }
+    }
+
+    fn carry_end_inner(&mut self, cancel: bool, duration_ms: u16) {
         let from = self.carry_preview_rect();
         let Some(carry) = self.carry.take() else {
             return;

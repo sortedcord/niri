@@ -29,7 +29,9 @@ and personal desktop configuration are not included.
 2. Finger movement progressively lifts/shrinks a live copy toward screen center.
    The actual window stays in its original layout slot as a fading ghost.
 3. Horizontal/vertical strokes pan columns/workspaces **underneath the copy** at
-   the same time. The desktop does not zoom or open the overview.
+   the same time. The desktop does not zoom or open the overview. Swiping past
+   the first or last column stops with the empty space beyond it at the center,
+   ready to drop the window there.
 4. A brief motion pause or finger-up smoothly completes any partial pickup.
    Keep Super held to lift/reposition fingers and perform additional strokes.
 5. Release Super to commit the center insertion preview. The copy moves and

@@ -553,3 +553,141 @@ fn unplug_cancels_carry_without_losing_its_tile() {
     assert_eq!(ghost_count(&layout), 0);
     assert_eq!(layout.windows().count(), 3);
 }
+
+/// Three windows (focused on the last), with columns wide enough to overflow the view.
+fn wide_fixture() -> Layout<TestWindow> {
+    let mut layout = fixture();
+    for id in [1, 2, 3] {
+        check_ops_on_layout(
+            &mut layout,
+            [
+                Op::FocusWindow(id),
+                Op::SetColumnWidth(SizeChange::SetProportion(60.)),
+                Op::Communicate(id),
+            ],
+        );
+    }
+    check_ops_on_layout(&mut layout, [Op::FocusWindow(3), Op::CompleteAnimations]);
+    layout
+}
+
+fn carry_view_pos(layout: &Layout<TestWindow>) -> f64 {
+    layout.active_workspace().unwrap().scrolling().view_pos()
+}
+
+/// One carry navigation stroke of horizontal finger motion, then finger-up and settle.
+fn carry_stroke(layout: &mut Layout<TestWindow>, output: &Output, dx: f64, steps: u64) {
+    let mut nav = Navigation::new(true);
+    for i in 0..steps {
+        let timestamp = Duration::from_millis(1000 + i * 16);
+        layout.navigation_update(&mut nav, output, Point::from((dx, 0.)), timestamp);
+        layout.refresh(true);
+        Op::AdvanceAnimations { msec_delta: 16 }.apply(layout);
+        layout.verify_invariants();
+    }
+    layout.navigation_end(&nav);
+    Op::CompleteAnimations.apply(layout);
+    layout.refresh(true);
+    layout.verify_invariants();
+}
+
+fn carry_insert_position(layout: &Layout<TestWindow>, output: &Output) -> InsertPosition {
+    let center = output_size(output).to_point().downscale(2.);
+    layout
+        .active_workspace()
+        .unwrap()
+        .scrolling_insert_position(center)
+}
+
+fn column_order(layout: &Layout<TestWindow>) -> Vec<usize> {
+    let mut slots = slots(layout);
+    slots.sort_by_key(|(_, (col, row))| (*col, *row));
+    slots.into_iter().map(|(id, _)| id).collect()
+}
+
+#[test]
+fn carry_view_comes_to_rest_past_the_first_column() {
+    let mut layout = wide_fixture();
+    let output = layout.carry_begin(&3, 0.85).unwrap();
+    layout.carry_finish_pickup();
+    // Swipe far toward the start: plain gestures would snap back onto the first column.
+    carry_stroke(&mut layout, &output, -60., 30);
+    let gaps = 16.;
+    let half_view = output_size(&output).w / 2.;
+    assert_eq!(carry_view_pos(&layout), -gaps - half_view);
+    assert_eq!(
+        carry_insert_position(&layout, &output),
+        InsertPosition::NewColumn(0)
+    );
+    // It stays there across refreshes and frames while still carrying.
+    for _ in 0..10 {
+        layout.refresh(true);
+        Op::AdvanceAnimations { msec_delta: 16 }.apply(&mut layout);
+    }
+    assert_eq!(carry_view_pos(&layout), -gaps - half_view);
+
+    layout.carry_end_with_duration(false, 0);
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.refresh(true);
+    layout.verify_invariants();
+    assert_eq!(column_order(&layout), vec![3, 1, 2]);
+    // The view returns to normal bounds around the dropped window.
+    assert!(carry_view_pos(&layout) >= -gaps);
+}
+
+#[test]
+fn carry_view_comes_to_rest_past_the_last_column() {
+    let mut layout = wide_fixture();
+    check_ops_on_layout(&mut layout, [Op::FocusWindow(1), Op::CompleteAnimations]);
+    let output = layout.carry_begin(&1, 0.85).unwrap();
+    layout.carry_finish_pickup();
+    carry_stroke(&mut layout, &output, 60., 30);
+    assert_eq!(
+        carry_insert_position(&layout, &output),
+        InsertPosition::NewColumn(3)
+    );
+    layout.carry_end_with_duration(false, 0);
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.refresh(true);
+    layout.verify_invariants();
+    assert_eq!(column_order(&layout), vec![2, 3, 1]);
+}
+
+#[test]
+fn small_carry_strokes_still_snap_to_inner_columns() {
+    let mut layout = wide_fixture();
+    let output = layout.carry_begin(&3, 0.85).unwrap();
+    layout.carry_finish_pickup();
+    // A short slow stroke stays within the columns.
+    carry_stroke(&mut layout, &output, -4., 10);
+    assert!(carry_view_pos(&layout) >= -16.);
+    layout.carry_end(true);
+}
+
+#[test]
+fn cancel_or_same_slot_drop_returns_the_view_from_past_the_edge() {
+    for cancel in [true, false] {
+        let mut layout = wide_fixture();
+        check_ops_on_layout(&mut layout, [Op::FocusWindow(1), Op::CompleteAnimations]);
+        let before = carry_view_pos(&layout);
+        let output = layout.carry_begin(&1, 0.85).unwrap();
+        layout.carry_finish_pickup();
+        carry_stroke(&mut layout, &output, -60., 30);
+        assert!(carry_view_pos(&layout) < -16.);
+        // Dropping window 1 before the first column is its own slot.
+        layout.carry_end_with_duration(cancel, 0);
+        Op::CompleteAnimations.apply(&mut layout);
+        layout.refresh(true);
+        layout.verify_invariants();
+        assert_eq!(column_order(&layout), vec![1, 2, 3]);
+        assert_eq!(carry_view_pos(&layout), before, "cancel={cancel}");
+    }
+}
+
+#[test]
+fn plain_view_gestures_never_rest_past_the_edges() {
+    let mut layout = wide_fixture();
+    let output = layout.outputs().next().unwrap().clone();
+    carry_stroke(&mut layout, &output, -60., 30);
+    assert!(carry_view_pos(&layout) >= -16.);
+}

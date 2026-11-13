@@ -1872,6 +1872,14 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.view_offset_gesture_begin(is_touchpad);
     }
 
+    pub fn view_offset_gesture_allow_edge_overscroll(&mut self) {
+        self.scrolling.view_offset_gesture_allow_edge_overscroll();
+    }
+
+    pub fn settle_edge_overscroll(&mut self) {
+        self.scrolling.settle_edge_overscroll();
+    }
+
     pub fn view_offset_gesture_update(
         &mut self,
         delta_x: f64,
