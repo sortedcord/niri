@@ -15,7 +15,28 @@ use smithay::utils::{IsAlive, Logical, Point};
 
 use super::modifiers_from_state;
 use crate::niri::State;
-use crate::utils::output_size;
+use crate::utils::{output_size, with_toplevel_role};
+
+/// What happened to a new swipe when its fingers landed.
+pub(super) enum SwipeBegin {
+    /// A configured binding owns the swipe; nothing else may act on it.
+    Claimed,
+    /// Pass the whole swipe, as a live stream, to the window under the pointer.
+    Forward,
+    /// No configured binding applies; the built-in gestures may take it.
+    Unclaimed,
+}
+
+/// Whether a `forward-to-client` action wants a swipe over a window with this app-id.
+fn forward_matches(action: &GestureAction, app_id: Option<&str>) -> bool {
+    let GestureAction::ForwardToClient(pattern) = action else {
+        return false;
+    };
+    match pattern {
+        None => true,
+        Some(pattern) => app_id.is_some_and(|app_id| pattern.0.is_match(app_id)),
+    }
+}
 
 pub struct ConfiguredSwipe {
     candidates: Vec<TouchpadGesture>,
@@ -142,7 +163,13 @@ fn select_binding(
 }
 
 impl State {
-    pub(super) fn configured_swipe_begin(&mut self, fingers: u32) -> bool {
+    /// The app-id of the window under the pointer, which is who a forwarded swipe goes to.
+    fn pointer_window_app_id(&self) -> Option<String> {
+        let mapped = self.niri.window_under_cursor()?;
+        with_toplevel_role(mapped.toplevel(), |role| role.app_id.clone())
+    }
+
+    pub(super) fn configured_swipe_begin(&mut self, fingers: u32) -> SwipeBegin {
         // Never execute custom actions while locked, picking a screenshot, or
         // another pointer grab is in progress.
         if self.niri.is_locked()
@@ -151,7 +178,7 @@ impl State {
             || self.is_inhibiting_shortcuts()
             || self.niri.seat.get_pointer().is_some_and(|p| p.is_grabbed())
         {
-            return false;
+            return SwipeBegin::Unclaimed;
         }
         let held = modifiers_from_state(self.niri.seat.get_keyboard().unwrap().modifier_state());
         let mod_key = self.backend.mod_key(&self.niri.config.borrow());
@@ -178,7 +205,7 @@ impl State {
                 target: None,
                 output: Some(carry.output.clone()),
             });
-            return true;
+            return SwipeBegin::Claimed;
         }
         let candidates = select_candidates(
             &self.niri.config.borrow().touchpad_gestures,
@@ -187,8 +214,28 @@ impl State {
             mod_key,
         );
         if candidates.is_empty() {
-            return false;
+            return SwipeBegin::Unclaimed;
         }
+        // `forward-to-client` is decided now, from the window under the pointer, because a
+        // forwarded swipe has to reach the client from its first frame.
+        let app_id = self.pointer_window_app_id();
+        if candidates
+            .iter()
+            .any(|bind| forward_matches(&bind.action, app_id.as_deref()))
+        {
+            self.niri.gesture_swipe_3f_cumulative = None;
+            return SwipeBegin::Forward;
+        }
+        // Over any other window a forward binding behaves like `ignore`.
+        let candidates: Vec<_> = candidates
+            .into_iter()
+            .map(|mut bind| {
+                if matches!(bind.action, GestureAction::ForwardToClient(_)) {
+                    bind.action = GestureAction::Ignore;
+                }
+                bind
+            })
+            .collect();
         let target = self
             .niri
             .layout
@@ -209,7 +256,7 @@ impl State {
             target,
             output,
         });
-        true
+        SwipeBegin::Claimed
     }
 
     pub(super) fn configured_swipe_update(
@@ -405,7 +452,9 @@ impl State {
                 Operation::Overview
             }
             GestureAction::Run(_) => Operation::Run,
-            GestureAction::Ignore => Operation::Ignored,
+            // Decided when the fingers land (see `SwipeBegin::Forward`); a binding that reaches
+            // here did not match the window, so it behaves like `ignore`.
+            GestureAction::Ignore | GestureAction::ForwardToClient(_) => Operation::Ignored,
         }
     }
 
@@ -697,5 +746,33 @@ mod tests {
                 .direction,
             Direction::Any
         );
+    }
+
+    fn forward(pattern: Option<&str>) -> GestureAction {
+        GestureAction::ForwardToClient(
+            pattern.map(|p| niri_config::utils::RegexEq(p.parse().unwrap())),
+        )
+    }
+
+    #[test]
+    fn forward_matches_only_the_named_app() {
+        let action = forward(Some("^helium$"));
+        assert!(forward_matches(&action, Some("helium")));
+        assert!(!forward_matches(&action, Some("kitty")));
+        // A window without an app-id never matches a pattern.
+        assert!(!forward_matches(&action, None));
+    }
+
+    #[test]
+    fn forward_without_a_pattern_matches_every_window() {
+        let action = forward(None);
+        assert!(forward_matches(&action, Some("anything")));
+        assert!(forward_matches(&action, None));
+    }
+
+    #[test]
+    fn other_actions_never_forward() {
+        assert!(!forward_matches(&GestureAction::Ignore, Some("helium")));
+        assert!(!forward_matches(&GestureAction::ScrollView, Some("helium")));
     }
 }

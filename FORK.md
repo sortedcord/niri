@@ -115,12 +115,24 @@ touchpad-gesture fingers=3 modifiers="Super" direction="any" threshold=4.0 sensi
   landing, or set it to 0 for instant drop. Range 0–5000 ms.
 
 Other behaviors are `drag-window`, `scroll-view`, `switch-workspace`, `overview`,
-`ignore` (claim and do nothing), and `run { <one normal niri action>; }`.
+`ignore` (claim and do nothing), `forward-to-client app-id="REGEX"` (hand the swipe to
+the window under the pointer, below), and `run { <one normal niri action>; }`.
 `modifiers="any"` is a fallback matching any modifiers when no exact binding exists,
 e.g. `touchpad-gesture fingers=3 modifiers="any" { ignore; }` disables three-finger
 swipes. `carry-window` requires a modifier so it
 can commit on release. Defaults remain unchanged if no matching custom binding
 exists. Settings apply to new gestures through niri's normal config reload.
+
+`forward-to-client` passes the whole swipe to the application under the pointer as a live
+stream: a begin with the finger count, an update with the motion of the fingers on every
+touchpad frame, and an end. An app can use it for continuous gestures, such as three-finger
+tab scrubbing in Helide. `app-id` is a regular expression for the window's app-id; without
+it every window gets the swipe, and windows that do not match are treated as with `ignore`.
+The choice is made when the fingers land, so `direction` and `threshold` do not apply:
+
+```kdl
+touchpad-gesture fingers=3 modifiers="any" { forward-to-client app-id="^helium$"; }
+```
 
 See [the full configuration and behavior documentation](docs/wiki/Configurable-Touchpad-Gestures-Prototype.md)
 and [the example bindings](resources/gesture-prototype/gestures.kdl).

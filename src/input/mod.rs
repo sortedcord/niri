@@ -55,6 +55,8 @@ use crate::ui::screenshot_ui::ScreenshotUi;
 use crate::utils::spawning::{spawn, spawn_sh};
 use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 
+use self::configured_swipe::SwipeBegin;
+
 pub mod backend_ext;
 pub mod configured_swipe;
 pub mod move_grab;
@@ -3747,25 +3749,30 @@ impl State {
     fn on_gesture_swipe_begin<I: InputBackend>(&mut self, event: I::GestureSwipeBeginEvent) {
         // Clear any interrupted custom gesture before claiming the new stream.
         self.configured_swipe_end(true);
-        if self.configured_swipe_begin(event.fingers()) {
-            return;
-        }
-        if self.niri.window_mru_ui.is_open() {
-            // Don't start swipe gestures while in the MRU.
-            return;
-        }
+        match self.configured_swipe_begin(event.fingers()) {
+            SwipeBegin::Claimed => return,
+            // Skips the built-in gestures. With none of them active, the update and end events
+            // fall through to the client below as well.
+            SwipeBegin::Forward => {}
+            SwipeBegin::Unclaimed => {
+                if self.niri.window_mru_ui.is_open() {
+                    // Don't start swipe gestures while in the MRU.
+                    return;
+                }
 
-        if event.fingers() == 3 {
-            self.niri.gesture_swipe_3f_cumulative = Some((0., 0.));
+                if event.fingers() == 3 {
+                    self.niri.gesture_swipe_3f_cumulative = Some((0., 0.));
 
-            // We handled this event.
-            return;
-        } else if event.fingers() == 4 {
-            self.niri.layout.overview_gesture_begin();
-            self.niri.queue_redraw_all();
+                    // We handled this event.
+                    return;
+                } else if event.fingers() == 4 {
+                    self.niri.layout.overview_gesture_begin();
+                    self.niri.queue_redraw_all();
 
-            // We handled this event.
-            return;
+                    // We handled this event.
+                    return;
+                }
+            }
         }
 
         let serial = SERIAL_COUNTER.next_serial();

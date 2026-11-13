@@ -76,6 +76,16 @@ Each entry contains exactly one behavior:
   focused client receives it. Combine with `modifiers="any"` to disable a finger
   count entirely, or to remove leftover built-in gestures (such as the four-finger
   overview swipe, which ignores modifiers) after rebinding.
+- `forward-to-client app-id="REGEX"`: give the whole swipe to the window under the
+  pointer instead of acting on it. The client receives a live stream through
+  `zwp_pointer_gestures_v1`: a begin with the finger count, an update with the motion
+  of the fingers on every touchpad frame, and an end that says whether it was
+  cancelled. `app-id` is a regular expression matched against the window's app-id;
+  leave it out to forward to every window. Over a window that does not match, the
+  binding behaves like `ignore`. The decision is made when the fingers land, so
+  `direction` and `threshold` do not apply, and the built-in gestures for that finger
+  count do not start. The deltas are the physical finger motion, not inverted for
+  natural scrolling.
 - `run { ... }`: one ordinary niri action on successful release after recognition;
   cancelled gestures do not run it.
 

@@ -8,6 +8,7 @@ use std::str::FromStr;
 use knuffel::errors::DecodeError;
 use miette::miette;
 
+use crate::utils::RegexEq;
 use crate::{Action, Key, Modifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +74,11 @@ pub enum GestureAction {
     Overview,
     /// Claim the gesture and do nothing: neither a built-in gesture nor the client gets it.
     Ignore,
+    /// Hand the whole swipe to the window under the pointer, as a live stream of finger motion,
+    /// instead of acting on it. `app-id` is a regular expression; without it every window gets the
+    /// swipe. Windows that do not match are treated as with `ignore`. The choice is made when the
+    /// fingers land, so `direction` and `threshold` do not apply.
+    ForwardToClient(#[knuffel(property(name = "app-id"), str)] Option<RegexEq>),
     /// Run one ordinary niri action once, after the recognition threshold.
     Run(#[knuffel(children)] Vec<Action>),
 }
@@ -245,6 +251,33 @@ mod tests {
         assert_eq!(entries[0].action, GestureAction::Ignore);
         assert!(entries[1].any_modifiers);
         assert!(!entries[2].any_modifiers);
+    }
+
+    #[test]
+    fn forward_to_client_with_and_without_app_id() {
+        let entries = parse(
+            r#"
+            touchpad-gesture fingers=3 modifiers="any" { forward-to-client app-id="^helium$"; }
+            touchpad-gesture fingers=4 modifiers="any" { forward-to-client; }
+        "#,
+        )
+        .unwrap();
+        match &entries[0].action {
+            GestureAction::ForwardToClient(Some(pattern)) => {
+                assert!(pattern.0.is_match("helium"));
+                assert!(!pattern.0.is_match("helium-other"));
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+        assert_eq!(entries[1].action, GestureAction::ForwardToClient(None));
+    }
+
+    #[test]
+    fn forward_to_client_rejects_a_bad_pattern() {
+        assert!(
+            parse(r#"touchpad-gesture fingers=3 { forward-to-client app-id="(unclosed"; }"#)
+                .is_err()
+        );
     }
 
     #[test]
