@@ -94,6 +94,9 @@ These commands build a separate binary. They do **not** install it, replace your
 existing compositor, or change your desktop session. Avoid replacing a working
 compositor until you have tested this build and have a recovery route.
 
+On Arch, [`packaging/arch/`](packaging/arch/README.md) packages a pushed commit as
+`niri-sortedcord`, replacing the distro `niri` package, with rollback steps.
+
 ## Configure
 
 The new syntax is specific to this branch; stock niri v26.04 will reject it.

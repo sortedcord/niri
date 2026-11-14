@@ -1,0 +1,61 @@
+# Arch package of this fork (sortedcord/niri). Replaces the distro `niri` package.
+# Build steps are in packaging/arch/README.md. Restore stock niri with:
+#   sudo pacman -U /var/cache/pacman/pkg/niri-26.04-1-x86_64.pkg.tar.zst
+# (or `sudo pacman -S niri`).
+pkgname=niri-sortedcord
+pkgver=26.04.r7.g61a8dd8
+pkgrel=1
+pkgdesc='Scrollable-tiling Wayland compositor (sortedcord fork: configurable touchpad gestures, window carry, full-width-to-edges)'
+arch=('x86_64')
+url='https://github.com/sortedcord/niri'
+license=('GPL-3.0-or-later')
+depends=(cairo glib2 glibc libdisplay-info libgcc libinput libpipewire libxkbcommon
+         mesa pango pixman seatd systemd-libs xdg-desktop-portal-impl)
+makedepends=(cargo clang git)
+optdepends=('xwayland-satellite: for running X11 apps in XWayland'
+            'xdg-desktop-portal-gnome: a XDG desktop portal required for screencasting'
+            'xdg-desktop-portal-gtk: a suggested XDG desktop portal')
+provides=('niri=26.04' 'wayland-compositor')
+conflicts=('niri')
+options=(!lto)
+_commit=61a8dd8bb016941342f43f623bcc45121f6e5758
+source=("niri::git+https://github.com/sortedcord/niri.git#commit=${_commit}")
+sha256sums=('SKIP')
+
+prepare() {
+  cd niri
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd niri
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # Version string shown by `niri --version`.
+  export NIRI_BUILD_COMMIT="${_commit:0:7}"
+  cargo build --frozen --release --bin niri
+  for shell in bash fish zsh; do
+    ./target/release/niri completions "$shell" > "niri.$shell"
+  done
+}
+
+check() {
+  cd niri
+  ./target/release/niri validate --config resources/default-config.kdl
+  ./target/release/niri validate --config resources/gesture-prototype/test-config.kdl
+}
+
+package() {
+  cd niri
+  install -Dm755 target/release/niri "$pkgdir/usr/bin/niri"
+  install -Dm755 resources/niri-session "$pkgdir/usr/bin/niri-session"
+  install -Dm644 resources/niri.desktop "$pkgdir/usr/share/wayland-sessions/niri.desktop"
+  install -Dm644 resources/niri-portals.conf "$pkgdir/usr/share/xdg-desktop-portal/niri-portals.conf"
+  install -Dm644 resources/niri.service "$pkgdir/usr/lib/systemd/user/niri.service"
+  install -Dm644 resources/niri-shutdown.target "$pkgdir/usr/lib/systemd/user/niri-shutdown.target"
+  install -Dm644 niri.bash "$pkgdir/usr/share/bash-completion/completions/niri"
+  install -Dm644 niri.fish "$pkgdir/usr/share/fish/vendor_completions.d/niri.fish"
+  install -Dm644 niri.zsh "$pkgdir/usr/share/zsh/site-functions/_niri"
+  install -Dm644 README.md FORK.md resources/default-config.kdl -t "$pkgdir/usr/share/doc/niri"
+}
