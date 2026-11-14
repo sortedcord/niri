@@ -1887,6 +1887,7 @@ mod tests {
                             relative_to: BottomLeft,
                         },
                     ),
+                    float_spawn: None,
                     scroll_factor: None,
                     tiled_state: None,
                     background_effect: BackgroundEffectRule {

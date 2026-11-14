@@ -63,6 +63,10 @@ pub struct Mapped {
     /// Up-to-date rules.
     rules: ResolvedWindowRules,
 
+    /// Cursor position to place the window at when it first opens floating, for a float-spawn
+    /// rule. Taken by the first floating placement.
+    spawn_cursor: Cell<Option<Point<f64, Logical>>>,
+
     /// Whether the window rules need to be recomputed.
     ///
     /// This is not used in all cases; for example, app ID and title changes recompute the rules
@@ -272,6 +276,11 @@ enum RequestSizeOnce {
 }
 
 impl Mapped {
+    /// Records the cursor position for a float-spawn placement. Output-relative.
+    pub fn set_spawn_cursor(&mut self, cursor: Point<f64, Logical>) {
+        self.spawn_cursor.set(Some(cursor));
+    }
+
     pub fn new(window: Window, rules: ResolvedWindowRules, hook: HookId, config: &Config) -> Self {
         let surface = window.wl_surface().expect("no X11 support");
         let credentials = get_credentials_for_surface(&surface);
@@ -281,6 +290,7 @@ impl Mapped {
             credentials,
             pre_commit_hook: hook,
             rules,
+            spawn_cursor: Cell::new(None),
             need_to_recompute_rules: false,
             needs_configure: false,
             needs_frame_callback: false,
@@ -1356,6 +1366,10 @@ impl LayoutElement for Mapped {
 
     fn rules(&self) -> &ResolvedWindowRules {
         &self.rules
+    }
+
+    fn take_spawn_cursor(&self) -> Option<Point<f64, Logical>> {
+        self.spawn_cursor.take()
     }
 
     fn take_animation_snapshot(&mut self) -> Option<LayoutElementRenderSnapshot> {

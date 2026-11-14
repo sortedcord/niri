@@ -1,7 +1,7 @@
 use std::cmp::{max, min};
 
 use niri_config::utils::MergeWith as _;
-use niri_config::window_rule::{Match, WindowRule};
+use niri_config::window_rule::{FloatSpawn, Match, WindowRule};
 use niri_config::{
     BackgroundEffect, BlockOutFrom, BorderRule, CornerRadius, FloatingPosition, PresetSize,
     ResolvedPopupsRules, ShadowRule, TabIndicatorRule,
@@ -51,6 +51,9 @@ pub struct ResolvedWindowRules {
 
     /// Default floating position for this window.
     pub default_floating_position: Option<FloatingPosition>,
+
+    /// Place this window at the cursor when it opens floating.
+    pub float_spawn: Option<FloatSpawn>,
 
     /// Output to open this window on.
     pub open_on_output: Option<String>,
@@ -227,6 +230,10 @@ impl ResolvedWindowRules {
 
                 if let Some(x) = rule.default_floating_position {
                     resolved.default_floating_position = Some(x);
+                }
+
+                if let Some(x) = rule.float_spawn {
+                    resolved.float_spawn = Some(x);
                 }
 
                 if let Some(x) = rule.open_on_output.as_deref() {

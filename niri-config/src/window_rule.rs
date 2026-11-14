@@ -71,6 +71,8 @@ pub struct WindowRule {
     pub default_column_display: Option<ColumnDisplay>,
     #[knuffel(child)]
     pub default_floating_position: Option<FloatingPosition>,
+    #[knuffel(child)]
+    pub float_spawn: Option<FloatSpawn>,
     #[knuffel(child, unwrap(argument))]
     pub scroll_factor: Option<FloatOrInt<0, 100>>,
     #[knuffel(child, unwrap(argument))]
@@ -149,6 +151,72 @@ pub struct FloatingPosition {
     pub relative_to: RelativeTo,
 }
 
+/// Where a window that opens floating appears, relative to the mouse cursor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloatSpawn {
+    pub mode: SpawnMode,
+    /// Window size requested for the window, in logical pixels, without borders.
+    pub width: Option<u16>,
+    pub height: Option<u16>,
+    /// Logical pixels between the cursor and the window, for `smart-edge` only.
+    pub distance: f64,
+}
+
+#[derive(knuffel::DecodeScalar, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpawnMode {
+    /// The window's center is at the cursor.
+    Centered,
+    /// The window's corner or edge is at the cursor, chosen by where the cursor is on screen.
+    SmartEdge,
+}
+
+#[derive(knuffel::Decode)]
+struct RawFloatSpawn {
+    #[knuffel(property)]
+    mode: SpawnMode,
+    #[knuffel(property)]
+    width: Option<u16>,
+    #[knuffel(property)]
+    height: Option<u16>,
+    #[knuffel(property)]
+    distance: Option<FloatOrInt<0, 65535>>,
+}
+
+impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for FloatSpawn {
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, knuffel::errors::DecodeError<S>> {
+        let raw = RawFloatSpawn::decode_node(node, ctx)?;
+        let error =
+            |message: &str| knuffel::errors::DecodeError::unexpected(node, "float-spawn", message);
+
+        if raw.width == Some(0) || raw.height == Some(0) {
+            return Err(error("width and height must be positive"));
+        }
+
+        match raw.mode {
+            SpawnMode::Centered => {
+                if raw.distance.is_some() {
+                    return Err(error("distance only applies to mode=\"smart-edge\""));
+                }
+            }
+            SpawnMode::SmartEdge => {
+                if raw.width.is_none() || raw.height.is_none() {
+                    return Err(error("mode=\"smart-edge\" needs both width and height"));
+                }
+            }
+        }
+
+        Ok(Self {
+            mode: raw.mode,
+            width: raw.width,
+            height: raw.height,
+            distance: raw.distance.map_or(0., |distance| distance.0),
+        })
+    }
+}
+
 #[derive(knuffel::DecodeScalar, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum RelativeTo {
     #[default]
@@ -160,4 +228,58 @@ pub enum RelativeTo {
     Bottom,
     Left,
     Right,
+}
+
+#[cfg(test)]
+mod float_spawn_tests {
+    use super::*;
+    use crate::Config;
+
+    fn parse(rule: &str) -> Result<Option<FloatSpawn>, miette::Report> {
+        let text = format!("window-rule {{\n{rule}\n}}");
+        let config = Config::parse_mem(&text).map_err(miette::Report::new)?;
+        Ok(config.window_rules[0].float_spawn)
+    }
+
+    #[test]
+    fn parses_smart_edge_with_size_and_distance() {
+        let spawn = parse(r#"float-spawn mode="smart-edge" width=400 height=300 distance=12"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            spawn,
+            FloatSpawn {
+                mode: SpawnMode::SmartEdge,
+                width: Some(400),
+                height: Some(300),
+                distance: 12.,
+            }
+        );
+    }
+
+    #[test]
+    fn centered_needs_no_size_and_distance_defaults_to_zero() {
+        let spawn = parse(r#"float-spawn mode="centered""#).unwrap().unwrap();
+        assert_eq!(spawn.mode, SpawnMode::Centered);
+        assert_eq!(
+            (spawn.width, spawn.height, spawn.distance),
+            (None, None, 0.)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_float_spawn() {
+        for rule in [
+            // smart-edge places by the window's size, so it needs one.
+            r#"float-spawn mode="smart-edge" width=400"#,
+            r#"float-spawn mode="smart-edge""#,
+            // Centered placement has no distance to apply.
+            r#"float-spawn mode="centered" distance=10"#,
+            r#"float-spawn mode="centered" width=0 height=100"#,
+            r#"float-spawn mode="diagonal""#,
+            r#"float-spawn"#,
+        ] {
+            assert!(parse(rule).is_err(), "should reject: {rule}");
+        }
+    }
 }

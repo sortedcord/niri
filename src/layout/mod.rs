@@ -323,6 +323,12 @@ pub trait LayoutElement {
 
     fn rules(&self) -> &ResolvedWindowRules;
 
+    /// Cursor position to place this window at when it first opens floating, for a float-spawn
+    /// rule. Output-relative. Returns it at most once.
+    fn take_spawn_cursor(&self) -> Option<Point<f64, Logical>> {
+        None
+    }
+
     /// Runs periodic clean-up tasks.
     fn refresh(&self);
 

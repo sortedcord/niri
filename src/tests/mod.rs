@@ -6,6 +6,7 @@ mod server;
 
 mod animations;
 mod cursor_position;
+mod cursor_spawn;
 mod floating;
 mod fullscreen;
 mod layer_shell;

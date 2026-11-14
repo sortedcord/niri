@@ -1,5 +1,6 @@
 use std::collections::hash_map::Entry;
 
+use niri_config::PresetSize;
 use niri_ipc::PositionChange;
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData};
@@ -195,11 +196,47 @@ impl CompositorHandler for State {
                     // The mapped pre-commit hook deals with dma-bufs on its own.
                     self.remove_default_dmabuf_pre_commit_hook(surface);
                     let hook = add_mapped_toplevel_pre_commit_hook(toplevel);
-                    let mapped = {
+                    let mut mapped = {
                         let config = self.niri.config.borrow();
                         Mapped::new(window, rules, hook, &config)
                     };
                     let window = mapped.window.clone();
+
+                    // A float-spawn window opens on the output under the cursor, at the cursor. A
+                    // dialog next to its parent, or a window with an explicit output or workspace
+                    // rule, keeps its place. (The configured output is set even without a rule,
+                    // so the rules are what counts here.)
+                    let cursor_spawn = match mapped.rules().float_spawn {
+                        Some(_)
+                            if is_floating
+                                && parent.is_none()
+                                && mapped.rules().open_on_output.is_none()
+                                && mapped.rules().open_on_workspace.is_none() =>
+                        {
+                            let pointer = self.niri.seat.get_pointer().unwrap().current_location();
+                            self.niri
+                                .output_under(pointer)
+                                .map(|(cursor_output, within)| (cursor_output.clone(), within))
+                        }
+                        _ => None,
+                    };
+                    let (width, height) = match (&cursor_spawn, mapped.rules().float_spawn) {
+                        (Some(_), Some(spawn)) => match spawn.width.zip(spawn.height) {
+                            Some((w, h)) => (
+                                Some(PresetSize::Fixed(i32::from(w))),
+                                Some(PresetSize::Fixed(i32::from(h))),
+                            ),
+                            None => (width, height),
+                        },
+                        _ => (width, height),
+                    };
+                    let output = match &cursor_spawn {
+                        Some((cursor_output, _)) => Some(cursor_output.clone()),
+                        None => output,
+                    };
+                    if let Some((_, within)) = &cursor_spawn {
+                        mapped.set_spawn_cursor(*within);
+                    }
 
                     let target = if let Some(p) = &parent {
                         // Open dialogs next to their parent window.
