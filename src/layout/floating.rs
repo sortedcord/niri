@@ -1542,7 +1542,20 @@ pub(super) fn spawn_point_in_area(
                 Point::from((cx - w / 2., cy - h - d))
             }
         }
-        (None, None) => centered,
+        // Away from every edge: above the cursor, centered on it horizontally. If that doesn't
+        // fit, below the cursor. If neither fits, the side with more room, clamped later.
+        (None, None) => {
+            let above_room = cy - top - d;
+            let below_room = bottom - cy - d;
+            let above = cy - d - h;
+            if above >= top {
+                Point::from((cx - w / 2., above))
+            } else if cy + d + h <= bottom || below_room >= above_room {
+                Point::from((cx - w / 2., cy + d))
+            } else {
+                Point::from((cx - w / 2., above))
+            }
+        }
     }
 }
 
@@ -1621,14 +1634,33 @@ mod spawn_tests {
     }
 
     #[test]
-    fn smart_edge_away_from_every_edge_is_centered() {
-        assert_eq!(smart((960., 540.)), (760., 390.));
+    fn smart_edge_away_from_every_edge_opens_above_the_cursor() {
+        // Window bottom at 540 - 10 = 530, so its top is 230.
+        assert_eq!(smart((960., 540.)), (760., 230.));
+        // Not enough room above (200 - 10 - 300 < 0), so it opens below: top at 210.
+        assert_eq!(smart((960., 200.)), (760., 210.));
+        // Room neither above nor below (height 1000 in a 1080 area): the side with more room.
+        let tall = FloatSpawn {
+            mode: SpawnMode::SmartEdge,
+            width: Some(400),
+            height: Some(1000),
+            distance: 10.,
+        };
+        let area = Rectangle::new(Point::from((0., 0.)), Size::from((1920., 1080.)));
+        let pos = spawn_point_in_area(
+            area,
+            Point::from((960., 500.)),
+            Size::from((400., 1000.)),
+            tall,
+        );
+        // Above has 490 px of room, below has 570: below wins, top at 510.
+        assert_eq!((pos.x, pos.y), (760., 510.));
     }
 
     #[test]
     fn near_means_within_a_tenth_of_the_area() {
         // 1920 × 0.1 = 192: 191 counts as the left edge, 200 does not.
         assert_eq!(smart((191., 540.)), (201., 230.));
-        assert_eq!(smart((200., 540.)), (0., 390.));
+        assert_eq!(smart((200., 540.)), (0., 230.));
     }
 }

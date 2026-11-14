@@ -732,7 +732,7 @@ When it applies, this takes precedence over `default-floating-position`. The win
   - Near a right edge: the top-right corner is at the cursor, extending down, if it fits below. Otherwise the right edge's midpoint is at the cursor.
   - Near a top edge: the top-left corner is at the cursor, extending right, if it fits. Otherwise the top edge's midpoint is at the cursor.
   - Near a bottom edge: the bottom-right corner is at the cursor, extending left, if it fits. Otherwise the bottom edge's midpoint is at the cursor.
-  - Away from every edge: the window is centered on the cursor.
+  - Away from every edge: the window opens above the cursor, with its bottom-center at the cursor. If it doesn't fit above, it opens below, with its top-center at the cursor. If it fits neither way, it uses the side with more room and is then kept inside the working area.
 - `distance`: logical pixels between the cursor and the window, measured into the screen. Smart-edge only, default `0`.
 
 `width` and `height` are window sizes, without borders. A client that does not adopt the requested size is placed by the requested size anyway, so its edge may not line up with the cursor.

@@ -72,13 +72,13 @@ fn placed(f: &mut Fixture) -> (String, Point<f64, Logical>, Size<f64, Logical>) 
 }
 
 #[test]
-fn smart_edge_in_the_middle_of_the_screen_centers_on_the_cursor() {
+fn smart_edge_in_the_middle_of_the_screen_opens_above_the_cursor() {
     let mut f = fixture(&[(1, (1920, 1080))]);
     let cursor = global_at(&mut f, 1, (960., 540.));
     open_at(&mut f, cursor);
     let (_, pos, size) = placed(&mut f);
     assert_eq!(size, Size::from((400., 300.)));
-    assert_eq!(pos, Point::from((760., 390.)));
+    assert_eq!(pos, Point::from((760., 230.)));
 }
 
 #[test]
@@ -106,8 +106,8 @@ fn opens_on_the_output_under_the_cursor_with_positions_in_that_output() {
     open_at(&mut f, cursor);
     let (name, pos, _) = placed(&mut f);
     assert_eq!(name, f.niri_output(2).name());
-    // Centered on the middle of the 1280 × 720 output.
-    assert_eq!(pos, Point::from((440., 210.)));
+    // Above the middle of the 1280 × 720 output: bottom at 360 - 10, so top at 50.
+    assert_eq!(pos, Point::from((440., 50.)));
 }
 
 #[test]
