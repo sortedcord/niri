@@ -58,6 +58,8 @@ pub struct OffscreenRenderElement {
     src_size: Size<i32, Buffer>,
     alpha: f32,
     kind: Kind,
+    /// Extra presentation scale, e.g. for blending a window between two layout rectangles.
+    stretch: Scale<f64>,
 }
 
 #[derive(Debug)]
@@ -190,6 +192,7 @@ impl OffscreenBuffer {
             src_size,
             alpha: 1.,
             kind: Kind::Unspecified,
+            stretch: Scale::from(1.),
         };
 
         let data = OffscreenData {
@@ -229,10 +232,20 @@ impl OffscreenRenderElement {
         self
     }
 
+    /// Present the texture stretched by `stretch` around its offset.
+    pub fn with_stretch(mut self, stretch: Scale<f64>) -> Self {
+        self.stretch = stretch;
+        self
+    }
+
     pub fn logical_size(&self) -> Size<f64, Logical> {
         self.src_size
             .to_f64()
             .to_logical(self.scale, Transform::Normal)
+    }
+
+    fn presented_size(&self) -> Size<f64, Logical> {
+        self.logical_size().upscale(self.stretch)
     }
 
     fn damage_since(&self, commit: Option<CommitCounter>) -> DamageSet<i32, Buffer> {
@@ -252,7 +265,7 @@ impl Element for OffscreenRenderElement {
     }
 
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
-        let logical_geo = Rectangle::new(self.offset, self.logical_size());
+        let logical_geo = Rectangle::new(self.offset, self.presented_size());
         logical_geo.to_physical_precise_round(scale)
     }
 
@@ -281,6 +294,10 @@ impl Element for OffscreenRenderElement {
                 region = region.upscale(texture_size / src.size);
 
                 let logical = region.to_logical(self.scale, Transform::Normal, &src.size);
+                let logical = Rectangle::new(
+                    logical.loc.upscale(self.stretch),
+                    logical.size.upscale(self.stretch),
+                );
                 Some(logical.to_physical_precise_up(scale))
             })
             .collect()

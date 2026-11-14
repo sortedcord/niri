@@ -3,6 +3,7 @@ use std::iter::zip;
 use std::rc::Rc;
 
 use niri_config::utils::MergeWith as _;
+use niri_config::window_rule::{FloatSpawn, SpawnMode};
 use niri_config::{PresetSize, RelativeTo};
 use niri_ipc::{PositionChange, SizeChange, WindowLayout};
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -445,9 +446,21 @@ impl<W: LayoutElement> FloatingSpace<W> {
             }
         }
 
-        let pos = self.stored_or_default_tile_pos(&tile).unwrap_or_else(|| {
-            center_preferring_top_left_in_area(self.working_area, tile.tile_size())
-        });
+        let pos = match tile
+            .window()
+            .take_spawn_cursor()
+            .zip(tile.window().rules().float_spawn)
+        {
+            Some((cursor, spawn)) => {
+                let size = self.spawn_tile_size(&tile, &spawn);
+                let pos = self.spawn_position(cursor, size, spawn);
+                tile.floating_pos = Some(self.logical_to_size_frac(pos));
+                pos
+            }
+            None => self.stored_or_default_tile_pos(&tile).unwrap_or_else(|| {
+                center_preferring_top_left_in_area(self.working_area, tile.tile_size())
+            }),
+        };
 
         let data = Data::new(self.working_area, &tile, pos);
         self.data.insert(idx, data);
@@ -1164,6 +1177,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     pub fn refresh(&mut self, is_active: bool, is_focused: bool) {
         let active = self.active_window_id.clone();
         for tile in &mut self.tiles {
+            let carried = tile.is_carry_ghost();
             let win = tile.window_mut();
 
             win.set_active_in_column(true);
@@ -1173,7 +1187,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
             if self.options.deactivate_unfocused_windows {
                 is_active &= is_focused;
             }
-            win.set_activated(is_active);
+            win.set_activated(is_active || carried);
 
             let resize_data = self
                 .interactive_resize
@@ -1270,6 +1284,31 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let height = resolve(height, self.working_area.size.h);
 
         Size::from((width, height))
+    }
+
+    /// Size used to place a float-spawn window: the rule's size plus borders. The window may not
+    /// have committed that size yet when it opens.
+    fn spawn_tile_size(&self, tile: &Tile<W>, spawn: &FloatSpawn) -> Size<f64, Logical> {
+        let (Some(width), Some(height)) = (spawn.width, spawn.height) else {
+            return tile.tile_size();
+        };
+        let border = self
+            .options
+            .layout
+            .border
+            .merged_with(&tile.window().rules().border);
+        let extra = if border.off { 0. } else { border.width * 2. };
+        Size::from((f64::from(width) + extra, f64::from(height) + extra))
+    }
+
+    fn spawn_position(
+        &self,
+        cursor: Point<f64, Logical>,
+        size: Size<f64, Logical>,
+        spawn: FloatSpawn,
+    ) -> Point<f64, Logical> {
+        let pos = spawn_point_in_area(self.working_area, cursor, size, spawn);
+        self.clamp_within_working_area(pos, size)
     }
 
     pub fn stored_or_default_tile_pos(&self, tile: &Tile<W>) -> Option<Point<f64, Logical>> {
@@ -1404,9 +1443,224 @@ fn compute_toplevel_bounds(
     .to_i32_floor()
 }
 
+/// Fraction of the working area's width or height within which the cursor counts as being at
+/// that edge, for `smart-edge` placement.
+const SPAWN_EDGE_FRACTION: f64 = 0.1;
+
+#[derive(Clone, Copy)]
+enum Side {
+    Low,
+    High,
+}
+
+/// Top-left point for a window of `size` opening at `cursor`, in the coordinates of `area`.
+///
+/// Centered mode puts the window's center on the cursor. Smart-edge mode anchors the window to
+/// the cursor by a corner when the cursor is near a corner of `area`, and by a corner or the
+/// midpoint of an edge when it is near one edge. Every anchor sits `distance` away from the
+/// cursor, into the screen.
+pub(super) fn spawn_point_in_area(
+    area: Rectangle<f64, Logical>,
+    cursor: Point<f64, Logical>,
+    size: Size<f64, Logical>,
+    spawn: FloatSpawn,
+) -> Point<f64, Logical> {
+    let (cx, cy) = (cursor.x, cursor.y);
+    let (w, h) = (size.w, size.h);
+    let d = spawn.distance;
+
+    let centered = Point::from((cx - w / 2., cy - h / 2.));
+    if spawn.mode == SpawnMode::Centered {
+        return centered;
+    }
+
+    let left = area.loc.x;
+    let right = left + area.size.w;
+    let top = area.loc.y;
+    let bottom = top + area.size.h;
+
+    let near_x = area.size.w * SPAWN_EDGE_FRACTION;
+    let near_y = area.size.h * SPAWN_EDGE_FRACTION;
+    let horizontal = if cx - left < near_x {
+        Some(Side::Low)
+    } else if right - cx < near_x {
+        Some(Side::High)
+    } else {
+        None
+    };
+    let vertical = if cy - top < near_y {
+        Some(Side::Low)
+    } else if bottom - cy < near_y {
+        Some(Side::High)
+    } else {
+        None
+    };
+
+    match (horizontal, vertical) {
+        // Corners: the window's corner sits at the cursor.
+        (Some(Side::Low), Some(Side::Low)) => Point::from((cx + d, cy + d)),
+        (Some(Side::High), Some(Side::Low)) => Point::from((cx - w - d, cy + d)),
+        (Some(Side::Low), Some(Side::High)) => Point::from((cx + d, cy - h - d)),
+        (Some(Side::High), Some(Side::High)) => Point::from((cx - w - d, cy - h - d)),
+        // Left edge: bottom-left corner at the cursor, extending up, if it fits. Otherwise the
+        // left edge's midpoint is at the cursor.
+        (Some(Side::Low), None) => {
+            let y = cy - h - d;
+            if y >= top {
+                Point::from((cx + d, y))
+            } else {
+                Point::from((cx + d, cy - h / 2.))
+            }
+        }
+        // Right edge: top-right corner at the cursor, extending down, if it fits. Otherwise the
+        // right edge's midpoint is at the cursor.
+        (Some(Side::High), None) => {
+            let y = cy + d;
+            if y + h <= bottom {
+                Point::from((cx - w - d, y))
+            } else {
+                Point::from((cx - w - d, cy - h / 2.))
+            }
+        }
+        // Top edge: top-left corner at the cursor, extending right, if it fits. Otherwise the
+        // top edge's midpoint is at the cursor.
+        (None, Some(Side::Low)) => {
+            let x = cx + d;
+            if x + w <= right {
+                Point::from((x, cy + d))
+            } else {
+                Point::from((cx - w / 2., cy + d))
+            }
+        }
+        // Bottom edge: bottom-right corner at the cursor, extending left, if it fits. Otherwise
+        // the bottom edge's midpoint is at the cursor.
+        (None, Some(Side::High)) => {
+            let x = cx - w - d;
+            if x >= left {
+                Point::from((x, cy - h - d))
+            } else {
+                Point::from((cx - w / 2., cy - h - d))
+            }
+        }
+        // Away from every edge: above the cursor, centered on it horizontally. If that doesn't
+        // fit, below the cursor. If neither fits, the side with more room, clamped later.
+        (None, None) => {
+            let above_room = cy - top - d;
+            let below_room = bottom - cy - d;
+            let above = cy - d - h;
+            if above >= top {
+                Point::from((cx - w / 2., above))
+            } else if cy + d + h <= bottom || below_room >= above_room {
+                Point::from((cx - w / 2., cy + d))
+            } else {
+                Point::from((cx - w / 2., above))
+            }
+        }
+    }
+}
+
 fn resolve_preset_size(preset: PresetSize, view_size: f64) -> ResolvedSize {
     match preset {
         PresetSize::Proportion(proportion) => ResolvedSize::Tile(view_size * proportion),
         PresetSize::Fixed(width) => ResolvedSize::Window(f64::from(width)),
+    }
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use niri_config::window_rule::{FloatSpawn, SpawnMode};
+    use smithay::utils::{Point, Rectangle, Size};
+
+    use super::spawn_point_in_area;
+
+    // A 1920×1080 working area at the origin; windows are 400×300 with a 10 px distance.
+    fn place(mode: SpawnMode, cursor: (f64, f64)) -> (f64, f64) {
+        let spawn = FloatSpawn {
+            mode,
+            width: Some(400),
+            height: Some(300),
+            distance: 10.,
+        };
+        let area = Rectangle::new(Point::from((0., 0.)), Size::from((1920., 1080.)));
+        let pos = spawn_point_in_area(area, Point::from(cursor), Size::from((400., 300.)), spawn);
+        (pos.x, pos.y)
+    }
+
+    fn smart(cursor: (f64, f64)) -> (f64, f64) {
+        place(SpawnMode::SmartEdge, cursor)
+    }
+
+    #[test]
+    fn centered_puts_the_window_center_on_the_cursor() {
+        assert_eq!(place(SpawnMode::Centered, (960., 540.)), (760., 390.));
+        // Distance does not apply to centered placement.
+        assert_eq!(place(SpawnMode::Centered, (0., 0.)), (-200., -150.));
+    }
+
+    #[test]
+    fn smart_edge_corners_anchor_the_window_corner_at_the_cursor() {
+        // Top-left: the window's top-left sits `distance` inside the cursor.
+        assert_eq!(smart((2., 3.)), (12., 13.));
+        // Top-right.
+        assert_eq!(smart((1917., 3.)), (1507., 13.));
+        // Bottom-left.
+        assert_eq!(smart((2., 1077.)), (12., 767.));
+        // Bottom-right.
+        assert_eq!(smart((1917., 1077.)), (1507., 767.));
+    }
+
+    #[test]
+    fn smart_edge_side_uses_the_corner_when_it_fits() {
+        // Left: bottom-left corner at the cursor, extending up: 540 - 300 - 10.
+        assert_eq!(smart((3., 540.)), (13., 230.));
+        // Right: top-right corner at the cursor, extending down.
+        assert_eq!(smart((1917., 540.)), (1507., 550.));
+        // Top: top-left corner at the cursor, extending right.
+        assert_eq!(smart((960., 3.)), (970., 13.));
+        // Bottom: bottom-right corner at the cursor, extending left.
+        assert_eq!(smart((960., 1077.)), (550., 767.));
+    }
+
+    #[test]
+    fn smart_edge_side_falls_back_to_the_edge_midpoint_when_the_corner_does_not_fit() {
+        // Left: 200 - 310 is above the screen, so the left edge's midpoint is at the cursor.
+        assert_eq!(smart((3., 200.)), (13., 50.));
+        // Right: 900 + 10 + 300 is below the screen. (Y 900 is outside the bottom zone.)
+        assert_eq!(smart((1917., 900.)), (1507., 750.));
+        // Top: 1700 + 10 + 400 is past the right edge. (X 1700 is outside the right zone.)
+        assert_eq!(smart((1700., 3.)), (1500., 13.));
+        // Bottom: 300 - 410 is left of the screen. (X 300 is outside the left zone.)
+        assert_eq!(smart((300., 1077.)), (100., 767.));
+    }
+
+    #[test]
+    fn smart_edge_away_from_every_edge_opens_above_the_cursor() {
+        // Window bottom at 540 - 10 = 530, so its top is 230.
+        assert_eq!(smart((960., 540.)), (760., 230.));
+        // Not enough room above (200 - 10 - 300 < 0), so it opens below: top at 210.
+        assert_eq!(smart((960., 200.)), (760., 210.));
+        // Room neither above nor below (height 1000 in a 1080 area): the side with more room.
+        let tall = FloatSpawn {
+            mode: SpawnMode::SmartEdge,
+            width: Some(400),
+            height: Some(1000),
+            distance: 10.,
+        };
+        let area = Rectangle::new(Point::from((0., 0.)), Size::from((1920., 1080.)));
+        let pos = spawn_point_in_area(
+            area,
+            Point::from((960., 500.)),
+            Size::from((400., 1000.)),
+            tall,
+        );
+        // Above has 490 px of room, below has 570: below wins, top at 510.
+        assert_eq!((pos.x, pos.y), (760., 510.));
+    }
+
+    #[test]
+    fn near_means_within_a_tenth_of_the_area() {
+        // 1920 × 0.1 = 192: 191 counts as the left edge, 200 does not.
+        assert_eq!(smart((191., 540.)), (201., 230.));
+        assert_eq!(smart((200., 540.)), (0., 230.));
     }
 }

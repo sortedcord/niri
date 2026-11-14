@@ -1,5 +1,12 @@
 <h1 align="center"><img alt="niri" src="https://github.com/user-attachments/assets/07d05cd0-d5dc-4a28-9a35-51bae8f119a0"></h1>
 <p align="center">A scrollable-tiling Wayland compositor.</p>
+
+> **Fork feature branch: configurable touchpad carry gestures.**
+> This branch preserves the tested implementation based on **niri v26.04**, not current upstream main.
+> It adds gesture-driven window pickup, a source ghost, workspace navigation beneath a centered preview,
+> a configurable smooth landing, and native scroll-driven smart borders (`full-width-to-edges`). See **[FORK.md](FORK.md)** for building, configuration, testing,
+> and limitations. This feature is experimental; the upstream information below is retained for reference.
+
 <p align="center">
     <a href="https://matrix.to/#/#niri:matrix.org"><img alt="Matrix" src="https://img.shields.io/badge/matrix-%23niri-blue?logo=matrix"></a>
     <a href="https://github.com/niri-wm/niri/blob/main/LICENSE"><img alt="GitHub License" src="https://img.shields.io/github/license/niri-wm/niri"></a>

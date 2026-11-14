@@ -711,6 +711,32 @@ window-rule {
 }
 ```
 
+
+#### `float-spawn`
+
+Place a window at the mouse cursor when it opens floating. This is a fork feature, not in upstream niri.
+
+```kdl
+window-rule {
+    open-floating true
+    float-spawn mode="smart-edge" width=800 height=500 distance=12
+}
+```
+
+When it applies, this takes precedence over `default-floating-position`. The window opens on the output under the cursor. It does not apply to a dialog opened from another window, or to a window with `open-on-output` or `open-on-workspace`, since those choose their own place. The window is kept inside the working area.
+
+- `mode="centered"`: the window's center is at the cursor. `width` and `height` are optional. Without them the window keeps its own size. `distance` is not allowed.
+- `mode="smart-edge"`: `width` and `height` are required. They are the size the window is asked for, and placement uses them. When the cursor is within 10% of the working area's width or height from a screen corner or edge:
+  - Near a corner: that corner of the window is at the cursor.
+  - Near a left edge: the window's bottom-left corner is at the cursor, extending up, if it fits above. Otherwise the left edge's midpoint is at the cursor.
+  - Near a right edge: the top-right corner is at the cursor, extending down, if it fits below. Otherwise the right edge's midpoint is at the cursor.
+  - Near a top edge: the top-left corner is at the cursor, extending right, if it fits. Otherwise the top edge's midpoint is at the cursor.
+  - Near a bottom edge: the bottom-right corner is at the cursor, extending left, if it fits. Otherwise the bottom edge's midpoint is at the cursor.
+  - Away from every edge: the window opens above the cursor, with its bottom-center at the cursor. If it doesn't fit above, it opens below, with its top-center at the cursor. If it fits neither way, it uses the side with more room and is then kept inside the working area.
+- `distance`: logical pixels between the cursor and the window, measured into the screen. Smart-edge only, default `0`.
+
+`width` and `height` are window sizes, without borders. A client that does not adopt the requested size is placed by the requested size anyway, so its edge may not line up with the cursor.
+
 #### `scroll-factor`
 
 <sup>Since: 25.02</sup>

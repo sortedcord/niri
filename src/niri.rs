@@ -370,6 +370,8 @@ pub struct Niri {
     pub pointer_inside_hot_corner: bool,
     pub tablet_cursor_location: Option<Point<f64, Logical>>,
     pub gesture_swipe_3f_cumulative: Option<(f64, f64)>,
+    pub configured_swipe: Option<crate::input::configured_swipe::ConfiguredSwipe>,
+    pub window_carry: Option<crate::input::configured_swipe::WindowCarry>,
     pub overview_scroll_swipe_gesture: ScrollSwipeGesture,
     pub vertical_wheel_tracker: ScrollTracker,
     pub horizontal_wheel_tracker: ScrollTracker,
@@ -2581,6 +2583,8 @@ impl Niri {
             pointer_inside_hot_corner: false,
             tablet_cursor_location: None,
             gesture_swipe_3f_cumulative: None,
+            configured_swipe: None,
+            window_carry: None,
             overview_scroll_swipe_gesture: ScrollSwipeGesture::new(),
             vertical_wheel_tracker: ScrollTracker::new(120),
             horizontal_wheel_tracker: ScrollTracker::new(120),
@@ -3455,6 +3459,19 @@ impl Niri {
         rv.window = window;
         rv.layer = layer;
         rv
+    }
+
+    /// Current cursor position for IPC, `None` if it is not on any output.
+    pub fn cursor_position(&self) -> Option<niri_ipc::CursorPosition> {
+        let pos = self.seat.get_pointer().unwrap().current_location();
+        let (output, within) = self.output_under(pos)?;
+        Some(niri_ipc::CursorPosition {
+            x: pos.x,
+            y: pos.y,
+            output: output.name(),
+            output_x: within.x,
+            output_y: within.y,
+        })
     }
 
     pub fn output_under_cursor(&self) -> Option<Output> {

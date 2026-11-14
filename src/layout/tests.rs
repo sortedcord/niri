@@ -14,7 +14,11 @@ use smithay::utils::Rectangle;
 use super::*;
 
 mod animations;
+mod carry;
 mod fullscreen;
+mod gesture_move;
+mod navigation;
+mod smart_edges;
 
 impl<W: LayoutElement> Default for Layout<W> {
     fn default() -> Self {
@@ -693,6 +697,23 @@ enum Op {
         timestamp: Duration,
     },
     OverviewGestureEnd,
+    CarryBegin {
+        #[proptest(strategy = "1..=5usize")]
+        window: usize,
+        #[proptest(strategy = "0.1f64..=1.0f64")]
+        preview_scale: f64,
+    },
+    CarryEnd {
+        cancel: bool,
+    },
+    CarryMotion(#[proptest(strategy = "0f64..=500f64")] f64),
+    CarryFinishPickup,
+    GestureMoveBegin {
+        #[proptest(strategy = "1..=5usize")]
+        window: usize,
+        #[proptest(strategy = "0.1f64..=1.0f64")]
+        preview_scale: f64,
+    },
     InteractiveMoveBegin {
         #[proptest(strategy = "1..=5usize")]
         window: usize,
@@ -1560,6 +1581,21 @@ impl Op {
             }
             Op::OverviewGestureEnd => {
                 layout.overview_gesture_end();
+            }
+            Op::CarryBegin {
+                window,
+                preview_scale,
+            } => {
+                layout.carry_begin(&window, preview_scale);
+            }
+            Op::CarryEnd { cancel } => layout.carry_end(cancel),
+            Op::CarryMotion(distance) => layout.carry_motion(distance),
+            Op::CarryFinishPickup => layout.carry_finish_pickup(),
+            Op::GestureMoveBegin {
+                window,
+                preview_scale,
+            } => {
+                layout.gesture_move_begin(&window, preview_scale);
             }
             Op::InteractiveMoveBegin {
                 window,
@@ -3888,6 +3924,7 @@ prop_compose! {
         center_focused_column in prop::option::of(arbitrary_center_focused_column()),
         always_center_single_column in prop::option::of(any::<bool>().prop_map(Flag)),
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
+        full_width_to_edges in prop::option::of(any::<bool>().prop_map(Flag)),
     ) -> niri_config::LayoutPart {
         niri_config::LayoutPart {
             gaps,
@@ -3895,6 +3932,7 @@ prop_compose! {
             center_focused_column,
             always_center_single_column,
             empty_workspace_above_first,
+            full_width_to_edges,
             focus_ring,
             border,
             shadow,

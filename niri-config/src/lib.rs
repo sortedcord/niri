@@ -40,6 +40,7 @@ pub mod layout;
 pub mod misc;
 pub mod output;
 pub mod recent_windows;
+pub mod touchpad_gestures;
 pub mod utils;
 pub mod window_rule;
 pub mod workspace;
@@ -82,6 +83,7 @@ pub struct Config {
     pub animations: Animations,
     pub blur: Blur,
     pub gestures: Gestures,
+    pub touchpad_gestures: Vec<touchpad_gestures::TouchpadGesture>,
     pub overview: Overview,
     pub environment: Environment,
     pub xwayland_satellite: XwaylandSatellite,
@@ -165,6 +167,7 @@ where
                     | "window-rule"
                     | "layer-rule"
                     | "workspace"
+                    | "touchpad-gesture"
                     | "include"
             ) && !seen.insert(name)
             {
@@ -214,6 +217,18 @@ where
                 "window-rule" => m_push!(window_rules),
                 "layer-rule" => m_push!(layer_rules),
                 "workspace" => m_push!(workspaces),
+                "touchpad-gesture" => {
+                    let part: touchpad_gestures::TouchpadGesture =
+                        knuffel::Decode::decode_node(node, ctx)?;
+                    let mut config = config.borrow_mut();
+                    config.touchpad_gestures.retain(|old| {
+                        old.fingers != part.fingers
+                            || old.modifiers != part.modifiers
+                            || old.any_modifiers != part.any_modifiers
+                            || old.direction != part.direction
+                    });
+                    config.touchpad_gestures.push(part);
+                }
 
                 // Single-part sections.
                 "binds" => {
@@ -1449,6 +1464,7 @@ mod tests {
                 center_focused_column: OnOverflow,
                 always_center_single_column: false,
                 empty_workspace_above_first: false,
+                full_width_to_edges: false,
                 default_column_display: Tabbed,
                 gaps: 8.0,
                 struts: Struts {
@@ -1662,6 +1678,7 @@ mod tests {
                     bottom_right: false,
                 },
             },
+            touchpad_gestures: [],
             overview: Overview {
                 zoom: 0.5,
                 backdrop_color: Color {
@@ -1870,6 +1887,7 @@ mod tests {
                             relative_to: BottomLeft,
                         },
                     ),
+                    float_spawn: None,
                     scroll_factor: None,
                     tiled_state: None,
                     background_effect: BackgroundEffectRule {

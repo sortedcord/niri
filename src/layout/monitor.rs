@@ -1798,6 +1798,15 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn dnd_scroll_gesture_begin(&mut self) {
+        self.dnd_scroll_gesture_begin_inner(false);
+    }
+
+    /// Gesture window pickup can scroll workspaces without opening the overview.
+    pub fn gesture_move_scroll_begin(&mut self) {
+        self.dnd_scroll_gesture_begin_inner(true);
+    }
+
+    fn dnd_scroll_gesture_begin_inner(&mut self, allow_normal_view: bool) {
         if let Some(WorkspaceSwitch::Gesture(WorkspaceSwitchGesture {
             dnd_last_event_time: Some(_),
             ..
@@ -1807,8 +1816,7 @@ impl<W: LayoutElement> Monitor<W> {
             return;
         }
 
-        if !self.overview_open {
-            // This gesture is only for the overview.
+        if !self.overview_open && !allow_normal_view {
             return;
         }
 

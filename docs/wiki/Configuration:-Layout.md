@@ -10,6 +10,7 @@ layout {
     center-focused-column "never"
     always-center-single-column
     empty-workspace-above-first
+    full-width-to-edges
     default-column-display "tabbed"
     background-color "#003300"
 
@@ -153,6 +154,31 @@ layout {
     empty-workspace-above-first
 }
 ```
+
+### `full-width-to-edges`
+
+<sup>Fork feature: `feat/configurable-touchpad-carry-v26.04`, not upstream niri</sup>
+
+If set, a column that is full width and contains a single window expands that window to the screen edges, like [maximize to edges](./Fullscreen-and-Maximize.md#windows-maximized-to-edges), but **continuously, driven by scrolling**.
+
+As the column scrolls toward its aligned position, the window smoothly grows from its normal gapped slot to the edges of the available area (your bar stays visible), while its border, focus ring, shadow, and rounded corners fade out.
+Scrolling away reverses the blend.
+The blend happens over the final quarter of the working-area width before alignment, and the window never rests in between: a full-width column left partly visible next to a focused neighbor shows normal gaps.
+The column's layout slot keeps its normal gaps, so neighboring columns never move, and the window is not resized while navigating: niri asks it for the edge-to-edge size once, when the column becomes eligible.
+
+Only normal (non-tabbed) full-width columns with exactly one tiled window are affected; this includes columns maximized with `maximize-column` and `proportion 1.0` widths.
+Stacked columns, floating, fullscreen, and maximized-to-edges windows behave as before.
+Windows whose maximum size is smaller than the edges are left alone.
+
+```kdl
+layout {
+    full-width-to-edges
+}
+```
+
+While partially expanded, the window is presented slightly scaled (within a few percent) between the two rectangles, so it can look marginally softer mid-scroll; at rest when aligned it is drawn pixel-exact.
+Pointer input follows the presented geometry.
+The blend currently follows horizontal scrolling only, and also applies inside the overview.
 
 ### `default-column-display`
 

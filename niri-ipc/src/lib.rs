@@ -85,6 +85,8 @@ pub enum Request {
     PickWindow,
     /// Request picking a color from the screen.
     PickColor,
+    /// Request the position of the mouse cursor.
+    CursorPosition,
     /// Perform an action.
     Action(Action),
     /// Change output configuration temporarily.
@@ -159,6 +161,8 @@ pub enum Response {
     PickedWindow(Option<Window>),
     /// Information about the picked color.
     PickedColor(Option<PickedColor>),
+    /// Position of the mouse cursor, or `None` if it is not on any output.
+    CursorPosition(Option<CursorPosition>),
     /// Output configuration change result.
     OutputConfigChanged(OutputConfigChanged),
     /// Information about the overview.
@@ -173,6 +177,22 @@ pub enum Response {
 pub struct Overview {
     /// Whether the overview is currently open.
     pub is_open: bool,
+}
+
+/// Position of the mouse cursor.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct CursorPosition {
+    /// X coordinate in the global logical coordinate space.
+    pub x: f64,
+    /// Y coordinate in the global logical coordinate space.
+    pub y: f64,
+    /// Name of the output the cursor is on.
+    pub output: String,
+    /// X coordinate relative to the top-left corner of that output, in logical pixels.
+    pub output_x: f64,
+    /// Y coordinate relative to the top-left corner of that output, in logical pixels.
+    pub output_y: f64,
 }
 
 /// Color picked from the screen.

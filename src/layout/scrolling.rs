@@ -30,6 +30,10 @@ use crate::window::ResolvedWindowRules;
 /// Amount of touchpad movement to scroll the view for the width of one working area.
 const VIEW_GESTURE_WORKING_AREA_MOVEMENT: f64 = 1200.;
 
+/// Fraction of the working area width, measured from alignment, over which a full-width column
+/// blends between its gapped slot and the screen edges.
+const SMART_EDGES_BLEND_FRACTION: f64 = 0.25;
+
 /// A scrollable-tiling space for windows.
 #[derive(Debug)]
 pub struct ScrollingSpace<W: LayoutElement> {
@@ -44,6 +48,10 @@ pub struct ScrollingSpace<W: LayoutElement> {
 
     /// Ongoing interactive resize.
     interactive_resize: Option<InteractiveResize<W>>,
+
+    /// Set when a window carry gesture left the view resting past the first (`Some(false)`) or
+    /// last (`Some(true)`) column; it returns to that column once the carry ends.
+    edge_overscrolled: Option<bool>,
 
     /// Offset of the view computed from the active column.
     ///
@@ -132,6 +140,8 @@ pub(super) struct ViewGesture {
     stationary_view_offset: f64,
     /// Whether the gesture is controlled by the touchpad.
     is_touchpad: bool,
+    /// Whether the gesture may come to rest past the first or last column (window carry).
+    edge_overscroll: bool,
 
     // If this gesture is for drag-and-drop scrolling, this is the last event's unadjusted
     // timestamp.
@@ -300,6 +310,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             view_offset: ViewOffset::Static(0.),
             activate_prev_column_on_removal: None,
             view_offset_to_restore: None,
+            edge_overscrolled: None,
             closing_windows: Vec::new(),
             view_size,
             working_area,
@@ -396,7 +407,39 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             || !self.closing_windows.is_empty()
     }
 
+    /// Blends each eligible full-width tile toward the screen edges by how close its column is to
+    /// being aligned in view. Purely visual: column geometry is unchanged.
+    pub fn update_smart_edges_progress(&mut self) {
+        let view_pos = self.view_pos();
+        let gaps = self.options.layout.gaps;
+        let aligned_x = self.working_area.loc.x + gaps;
+        // Blend only over the last stretch of travel toward alignment. A full-width column that
+        // stays partly visible next to a focused neighbor is therefore fully normal.
+        let blend = f64::max(1., self.working_area.size.w * SMART_EDGES_BLEND_FRACTION);
+        let view_at_rest = self.view_offset.is_static();
+        for (col, col_x) in self.columns_mut() {
+            let render_offset = col.render_offset().x;
+            let distance = (col_x - view_pos + render_offset - aligned_x).abs();
+            let progress = if view_at_rest && render_offset == 0. {
+                // Never rest in between: aligned is fully expanded, anything else normal.
+                if distance < 0.5 {
+                    1.
+                } else {
+                    0.
+                }
+            } else {
+                let near = 1. - (distance / blend).clamp(0., 1.);
+                // Smoothstep: no velocity discontinuity at either end of the blend.
+                near * near * (3. - 2. * near)
+            };
+            for tile in &mut col.tiles {
+                tile.set_smart_edges_progress(progress);
+            }
+        }
+    }
+
     pub fn update_render_elements(&mut self, is_active: bool) {
+        self.update_smart_edges_progress();
         let view_pos = Point::from((self.view_pos(), 0.));
         let view_size = self.view_size;
         let active_idx = self.active_column_idx;
@@ -691,6 +734,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         new_view_offset: f64,
         config: niri_config::Animation,
     ) {
+        self.edge_overscrolled = None;
+
         let new_col_x = self.column_x(idx);
         let old_col_x = self.column_x(self.active_column_idx);
         let offset_delta = old_col_x - new_col_x;
@@ -1059,8 +1104,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         // If this is the only tile in the column, remove the whole column.
         if self.columns[column_idx].tiles.len() == 1 {
             let mut column = self.remove_column_by_idx(column_idx, anim_config);
+            let mut tile = column.tiles.remove(tile_idx);
+            // The tile no longer has a column slot. Wherever it goes next (floating, another
+            // column) re-decides eligibility; eligible columns re-request the edges.
+            tile.clear_edges();
             return RemovedTile {
-                tile: column.tiles.remove(tile_idx),
+                tile,
                 width: column.width,
                 is_full_width: column.is_full_width,
                 is_floating: false,
@@ -3025,6 +3074,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             delta_from_tracker: self.view_offset.current(),
             stationary_view_offset: self.view_offset.stationary(),
             is_touchpad,
+            edge_overscroll: false,
             dnd_last_event_time: None,
             dnd_nonzero_start_time: None,
         };
@@ -3048,12 +3098,57 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             delta_from_tracker: self.view_offset.current(),
             stationary_view_offset: self.view_offset.stationary(),
             is_touchpad: false,
+            edge_overscroll: false,
             dnd_last_event_time: Some(self.clock.now_unadjusted()),
             dnd_nonzero_start_time: None,
         };
         self.view_offset = ViewOffset::Gesture(gesture);
 
         self.interactive_resize = None;
+    }
+
+    /// Lets the ongoing view gesture also come to rest with the empty space before the first or
+    /// after the last column at the middle of the view, so a carried window (held at the
+    /// center) can be dropped there.
+    pub fn view_offset_gesture_allow_edge_overscroll(&mut self) {
+        if let ViewOffset::Gesture(gesture) = &mut self.view_offset {
+            gesture.edge_overscroll = true;
+        }
+    }
+
+    /// Returns the view to the active column if a carry gesture left it past an edge, and
+    /// stops an ongoing gesture from coming to rest there.
+    pub fn settle_edge_overscroll(&mut self) {
+        if let ViewOffset::Gesture(gesture) = &mut self.view_offset {
+            gesture.edge_overscroll = false;
+        }
+        let Some(after_last) = self.edge_overscrolled.take() else {
+            return;
+        };
+        if self.columns.is_empty() || self.view_offset.is_gesture() {
+            return;
+        }
+        // Align the edge column with the view edge it came from, like the normal outermost
+        // snap, rather than the minimal motion that would leave a wide column on the far side.
+        let gaps = self.options.layout.gaps;
+        let (idx, from_x) = if after_last {
+            let idx = self.columns.len() - 1;
+            (idx, self.column_x(idx + 1) - self.view_size.w)
+        } else {
+            (0, -gaps)
+        };
+        let prev_idx = self.active_column_idx;
+        let new_view_offset = self.compute_new_view_offset_for_column(Some(from_x), idx, None);
+        self.animate_view_offset_with_config(
+            idx,
+            new_view_offset,
+            self.options.animations.horizontal_view_movement.0,
+        );
+        if prev_idx != idx {
+            self.active_column_idx = idx;
+            self.activate_prev_column_on_removal = None;
+            self.view_offset_to_restore = None;
+        }
     }
 
     pub fn view_offset_gesture_update(
@@ -3201,9 +3296,28 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             view_pos: f64,
             // Column to activate for this snapping point.
             col_idx: usize,
+            // Whether this rests past the first (`Some(false)`) or last (`Some(true)`) column.
+            edge: Option<bool>,
         }
 
         let mut snapping_points = Vec::new();
+
+        if gesture.edge_overscroll {
+            // Center the gap before the first column or after the last one, nudged by half a gap
+            // further out so the view center is unambiguously beyond the edge.
+            let gaps = self.options.layout.gaps;
+            let half_view = self.view_size.w / 2.;
+            snapping_points.push(Snap {
+                view_pos: -gaps - half_view,
+                col_idx: 0,
+                edge: Some(false),
+            });
+            snapping_points.push(Snap {
+                view_pos: self.column_x(self.columns.len()) - half_view,
+                col_idx: self.columns.len() - 1,
+                edge: Some(true),
+            });
+        }
 
         if self.is_centering_focused_column() {
             let mut col_x = 0.;
@@ -3226,7 +3340,11 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 } else {
                     col_x - (area.size.w - col_w) / 2. - left_strut
                 };
-                snapping_points.push(Snap { view_pos, col_idx });
+                snapping_points.push(Snap {
+                    view_pos,
+                    col_idx,
+                    edge: None,
+                });
 
                 col_x += col_w + self.options.layout.gaps;
             }
@@ -3338,10 +3456,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             snapping_points.push(Snap {
                 view_pos: leftmost_snap,
                 col_idx: 0,
+                edge: None,
             });
             snapping_points.push(Snap {
                 view_pos: rightmost_snap,
                 col_idx: last_col_idx,
+                edge: None,
             });
 
             let mut push = |col_idx, left, right| {
@@ -3349,6 +3469,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     snapping_points.push(Snap {
                         view_pos: left,
                         col_idx,
+                        edge: None,
                     });
                 }
 
@@ -3357,6 +3478,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     snapping_points.push(Snap {
                         view_pos: right,
                         col_idx,
+                        edge: None,
                     });
                 }
             };
@@ -3388,8 +3510,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .unwrap();
 
         let mut new_col_idx = target_snap.col_idx;
+        let edge = target_snap.edge;
 
-        if !self.is_centering_focused_column() {
+        if !self.is_centering_focused_column() && edge.is_none() {
             // Focus the furthest window towards the direction of the gesture.
             if target_view_offset >= current_view_offset {
                 for col_idx in (new_col_idx + 1)..self.columns.len() {
@@ -3479,6 +3602,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             velocity,
             self.options.animations.horizontal_view_movement.0,
         ));
+
+        if edge.is_some() {
+            // Rest past the edge; the fit-the-column correction below would pull the view back.
+            self.edge_overscrolled = edge;
+            return true;
+        }
 
         // HACK: deal with things like snapping to the right edge of a larger-than-view window.
         self.animate_view_offset_to_column(None, new_col_idx, None);
@@ -3668,6 +3797,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             };
 
             for (tile_idx, tile) in col.tiles.iter_mut().enumerate() {
+                let carried = tile.is_carry_ghost();
                 let win = tile.window_mut();
 
                 let active_in_column = col.active_tile_idx == tile_idx;
@@ -3682,7 +3812,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     // animations when switching tabs.
                     active &= active_in_column || is_tabbed;
                 }
-                win.set_activated(active);
+                // The fixed carried copy keeps client focus while the view pans.
+                win.set_activated(active || carried);
 
                 win.set_interactive_resize(col_resize_data);
 
@@ -4419,6 +4550,7 @@ impl<W: LayoutElement> Column<W> {
         let sizing_mode = self.pending_sizing_mode();
         if matches!(sizing_mode, SizingMode::Fullscreen | SizingMode::Maximized) {
             for (tile_idx, tile) in self.tiles.iter_mut().enumerate() {
+                tile.leave_edges();
                 // In tabbed mode, only the visible window participates in the transaction.
                 let is_active = tile_idx == self.active_tile_idx;
                 let transaction = if self.display_mode == ColumnDisplay::Tabbed && !is_active {
@@ -4690,6 +4822,11 @@ impl<W: LayoutElement> Column<W> {
             assert_eq!(auto_tiles_left, 0);
         }
 
+        let smart_edges = heights.first().and_then(|h| match h {
+            WindowHeight::Fixed(height) => self.smart_edges_rect(Size::from((width, *height))),
+            _ => None,
+        });
+
         for (tile_idx, (tile, h)) in zip(&mut self.tiles, heights).enumerate() {
             let WindowHeight::Fixed(height) = h else {
                 unreachable!()
@@ -4705,8 +4842,53 @@ impl<W: LayoutElement> Column<W> {
                 Some(transaction.clone())
             };
 
-            tile.request_tile_size(size, animate, transaction);
+            if let Some(edges) = smart_edges {
+                tile.request_edges_size(size, edges, animate, transaction);
+            } else {
+                tile.leave_edges();
+                tile.request_tile_size(size, animate, transaction);
+            }
         }
+    }
+
+    /// Edge rectangle for an eligible single-window full-width column, in tile-local coordinates
+    /// relative to the tile's position when the column is aligned at the working area's left gap.
+    fn smart_edges_rect(&self, tile_size: Size<f64, Logical>) -> Option<Rectangle<f64, Logical>> {
+        if !self.options.layout.full_width_to_edges
+            || self.tiles.len() != 1
+            || self.display_mode != ColumnDisplay::Normal
+            || !self.pending_sizing_mode().is_normal()
+        {
+            return None;
+        }
+
+        let full_width =
+            self.is_full_width || matches!(self.width, ColumnWidth::Proportion(p) if p >= 1.);
+        if !full_width {
+            return None;
+        }
+
+        let edges_size = self.parent_area.size;
+        // Respect windows that cannot grow to the edges (fixed-size dialogs and the like).
+        let tile = &self.tiles[0];
+        let max = tile.window().max_size();
+        let min = tile.window().min_size();
+        if (max.w > 0 && f64::from(max.w) < edges_size.w)
+            || (max.h > 0 && f64::from(max.h) < edges_size.h)
+            || f64::from(min.w) > edges_size.w
+            || f64::from(min.h) > edges_size.h
+            || tile_size.w <= 0.
+            || tile_size.h <= 0.
+        {
+            return None;
+        }
+
+        let gaps = self.options.layout.gaps;
+        let aligned = Point::from((
+            self.working_area.loc.x + gaps,
+            self.working_area.loc.y + gaps,
+        ));
+        Some(Rectangle::new(self.parent_area.loc - aligned, edges_size))
     }
 
     fn width(&self) -> f64 {
@@ -5412,8 +5594,11 @@ impl<W: LayoutElement> Column<W> {
             }
 
             let requested_size = tile.window().requested_size().unwrap();
-            let requested_tile_height =
-                tile.tile_height_for_window_height(f64::from(requested_size.h));
+            let requested_tile_height = match tile.smart_edges().filter(|smart| !smart.leaving) {
+                // Edge-expanded windows are intentionally larger than their layout slot.
+                Some(smart) => smart.slot.h,
+                None => tile.tile_height_for_window_height(f64::from(requested_size.h)),
+            };
             let min_tile_height = f64::max(1., tile.min_size_nonfullscreen().h);
 
             if !is_tabbed
