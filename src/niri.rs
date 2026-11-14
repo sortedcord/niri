@@ -3461,6 +3461,19 @@ impl Niri {
         rv
     }
 
+    /// Current cursor position for IPC, `None` if it is not on any output.
+    pub fn cursor_position(&self) -> Option<niri_ipc::CursorPosition> {
+        let pos = self.seat.get_pointer().unwrap().current_location();
+        let (output, within) = self.output_under(pos)?;
+        Some(niri_ipc::CursorPosition {
+            x: pos.x,
+            y: pos.y,
+            output: output.name(),
+            output_x: within.x,
+            output_y: within.y,
+        })
+    }
+
     pub fn output_under_cursor(&self) -> Option<Output> {
         let pos = self.seat.get_pointer().unwrap().current_location();
         self.global_space.output_under(pos).next().cloned()
