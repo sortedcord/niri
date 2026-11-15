@@ -410,6 +410,11 @@ pub struct Niri {
     pub inhibit_power_key_fd: Option<zbus::zvariant::OwnedFd>,
 
     pub ipc_server: Option<IpcServer>,
+    /// Whether a frame was rendered since the IPC view stream last looked at the layout.
+    ///
+    /// View positions are sampled once per rendered frame: animation values change on every
+    /// clock read, so sampling on every event loop iteration would flood view stream clients.
+    pub ipc_views_dirty: bool,
     pub ipc_outputs_changed: bool,
 
     pub satellite: Option<Satellite>,
@@ -2623,6 +2628,7 @@ impl Niri {
             inhibit_power_key_fd: None,
 
             ipc_server,
+            ipc_views_dirty: true,
             ipc_outputs_changed: false,
 
             satellite: None,
@@ -4606,6 +4612,7 @@ impl Niri {
 
         // Freeze the clock at the target time.
         self.clock.set_unadjusted(target_presentation_time);
+        self.ipc_views_dirty = true;
 
         self.update_render_elements(Some(output));
 

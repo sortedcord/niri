@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ use niri_config::OutputName;
 use niri_ipc::state::{EventStreamState, EventStreamStatePart as _};
 use niri_ipc::{
     Action, Event, KeyboardLayouts, OutputConfigChanged, Overview, Reply, Request, Response,
-    Timestamp, WindowLayout, Workspace,
+    Timestamp, ViewDriver, WindowLayout, Workspace,
 };
 use smithay::desktop::layer_map_for_output;
 use smithay::input::pointer::{
@@ -32,6 +32,7 @@ use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
 
 use crate::backend::IpcOutputMap;
 use crate::input::pick_window_grab::PickWindowGrab;
+use crate::layout::scrolling::{ColumnPositionTracker, ColumnView};
 use crate::layout::workspace::WorkspaceId;
 use crate::niri::State;
 use crate::utils::{version, with_toplevel_role};
@@ -41,6 +42,22 @@ use crate::window::Mapped;
 // number in our buffer, we drop that event stream client.
 const EVENT_STREAM_BUFFER_SIZE: usize = 64;
 
+// View streams get up to one event per frame per moving view, so they need more headroom.
+const VIEW_STREAM_BUFFER_SIZE: usize = 1024;
+
+// Smallest position change (in workspaces/columns) worth sending over the view stream.
+const VIEW_POSITION_EPSILON: f64 = 1e-4;
+// Smallest camera change in logical pixels worth sending over the view stream.
+const VIEW_PIXEL_EPSILON: f64 = 0.01;
+
+/// Last view state sent over the view stream.
+#[derive(Default)]
+struct ViewState {
+    /// Output name -> (position, target workspace id, driver).
+    outputs: HashMap<String, (f64, u64, ViewDriver)>,
+    /// Workspace id -> (last sent column view with its tracked position, position tracker).
+    columns: HashMap<u64, (ColumnView, ColumnPositionTracker)>,
+}
 pub struct IpcServer {
     /// Path to the IPC socket.
     ///
@@ -48,6 +65,8 @@ pub struct IpcServer {
     pub socket_path: Option<PathBuf>,
     event_streams: Rc<RefCell<Vec<EventStreamSender>>>,
     event_stream_state: Rc<RefCell<EventStreamState>>,
+    view_streams: Rc<RefCell<Vec<EventStreamSender>>>,
+    view_state: Rc<RefCell<ViewState>>,
 }
 
 struct ClientCtx {
@@ -56,6 +75,8 @@ struct ClientCtx {
     ipc_outputs: Arc<Mutex<IpcOutputMap>>,
     event_streams: Rc<RefCell<Vec<EventStreamSender>>>,
     event_stream_state: Rc<RefCell<EventStreamState>>,
+    view_streams: Rc<RefCell<Vec<EventStreamSender>>>,
+    view_state: Rc<RefCell<ViewState>>,
 }
 
 struct EventStreamClient {
@@ -109,30 +130,40 @@ impl IpcServer {
             socket_path,
             event_streams: Rc::new(RefCell::new(Vec::new())),
             event_stream_state: Rc::new(RefCell::new(EventStreamState::default())),
+            view_streams: Rc::new(RefCell::new(Vec::new())),
+            view_state: Rc::new(RefCell::new(ViewState::default())),
         })
     }
 
     fn send_event(&self, event: Event) {
-        let mut streams = self.event_streams.borrow_mut();
-        let mut to_remove = Vec::new();
-        for (idx, stream) in streams.iter_mut().enumerate() {
-            match stream.events.try_send(event.clone()) {
-                Ok(()) => (),
-                Err(TrySendError::Closed(_)) => to_remove.push(idx),
-                Err(TrySendError::Full(_)) => {
-                    warn!(
-                        "disconnecting IPC event stream client \
-                         because it is reading events too slowly"
-                    );
-                    to_remove.push(idx);
-                }
+        send_to_streams(&self.event_streams, event);
+    }
+
+    fn send_view_event(&self, event: Event) {
+        send_to_streams(&self.view_streams, event);
+    }
+}
+
+fn send_to_streams(streams: &RefCell<Vec<EventStreamSender>>, event: Event) {
+    let mut streams = streams.borrow_mut();
+    let mut to_remove = Vec::new();
+    for (idx, stream) in streams.iter_mut().enumerate() {
+        match stream.events.try_send(event.clone()) {
+            Ok(()) => (),
+            Err(TrySendError::Closed(_)) => to_remove.push(idx),
+            Err(TrySendError::Full(_)) => {
+                warn!(
+                    "disconnecting IPC event stream client \
+                     because it is reading events too slowly"
+                );
+                to_remove.push(idx);
             }
         }
+    }
 
-        for idx in to_remove.into_iter().rev() {
-            let stream = streams.swap_remove(idx);
-            let _ = stream.disconnect.send_blocking(());
-        }
+    for idx in to_remove.into_iter().rev() {
+        let stream = streams.swap_remove(idx);
+        let _ = stream.disconnect.send_blocking(());
     }
 }
 
@@ -172,6 +203,8 @@ fn on_new_ipc_client(state: &mut State, stream: UnixStream) {
         ipc_outputs: state.backend.ipc_outputs(),
         event_streams: ipc_server.event_streams.clone(),
         event_stream_state: ipc_server.event_stream_state.clone(),
+        view_streams: ipc_server.view_streams.clone(),
+        view_state: ipc_server.view_state.clone(),
     };
 
     let future = async move {
@@ -207,6 +240,7 @@ async fn handle_client(ctx: ClientCtx, stream: Async<'static, UnixStream>) -> an
             .map_err(|err| err.to_string());
         let requested_error = matches!(request, Ok(Request::ReturnError));
         let requested_event_stream = matches!(request, Ok(Request::EventStream));
+        let requested_view_stream = matches!(request, Ok(Request::ViewStream));
 
         let reply = match request {
             Ok(request) => process(&ctx, request).await,
@@ -262,6 +296,38 @@ async fn handle_client(ctx: ClientCtx, stream: Async<'static, UnixStream>) -> an
                 };
                 streams.push(sender);
             }
+
+            return Ok(());
+        }
+
+        if requested_view_stream {
+            let (events_tx, events_rx) = async_channel::bounded(VIEW_STREAM_BUFFER_SIZE);
+            let (disconnect_tx, disconnect_rx) = async_channel::bounded(1);
+
+            let client = EventStreamClient {
+                events: events_rx,
+                disconnect: disconnect_rx,
+                write: Box::new(write) as _,
+            };
+            let future = async move {
+                if let Err(err) = handle_event_stream_client(client).await {
+                    warn!("error handling IPC view stream client: {err:?}");
+                }
+            };
+            if let Err(err) = ctx.scheduler.schedule(future) {
+                warn!("error scheduling IPC view stream future: {err:?}");
+            }
+
+            // Forget what was sent so far: the next layout refresh (right after this dispatch)
+            // then sends every view's current state, which doubles as this client's initial state.
+            *ctx.view_state.borrow_mut() = ViewState::default();
+            ctx.event_loop
+                .insert_idle(|state| state.niri.ipc_views_dirty = true);
+
+            ctx.view_streams.borrow_mut().push(EventStreamSender {
+                events: events_tx,
+                disconnect: disconnect_tx,
+            });
 
             return Ok(());
         }
@@ -456,6 +522,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             Response::FocusedOutput(output)
         }
         Request::EventStream => Response::Handled,
+        Request::ViewStream => Response::Handled,
         Request::OverviewState => {
             let state = ctx.event_stream_state.borrow();
             let is_open = state.overview.is_open;
@@ -595,6 +662,90 @@ impl State {
         self.ipc_refresh_workspaces();
         self.ipc_refresh_windows();
         self.ipc_refresh_overview();
+        self.ipc_refresh_views();
+    }
+
+    /// Sends live view (camera) changes to view stream clients.
+    fn ipc_refresh_views(&mut self) {
+        let Some(server) = &self.niri.ipc_server else {
+            return;
+        };
+
+        if server.view_streams.borrow().is_empty() || !self.niri.ipc_views_dirty {
+            return;
+        }
+        self.niri.ipc_views_dirty = false;
+
+        let _span = tracy_client::span!("State::ipc_refresh_views");
+
+        let mut state = server.view_state.borrow_mut();
+        let layout = &self.niri.layout;
+        let mut events = Vec::new();
+
+        let mut seen_outputs = HashSet::new();
+        for mon in layout.monitors() {
+            let output = mon.output_name().clone();
+            let position = mon.workspace_render_idx();
+            let target = mon.active_workspace_ref().id().get();
+            let driver = mon.workspace_switch_driver();
+            seen_outputs.insert(output.clone());
+
+            let changed = state.outputs.get(&output).is_none_or(|&(p, t, d)| {
+                (p - position).abs() > VIEW_POSITION_EPSILON || t != target || d != driver
+            });
+            if changed {
+                state
+                    .outputs
+                    .insert(output.clone(), (position, target, driver));
+                events.push(Event::WorkspaceViewChanged {
+                    output,
+                    position,
+                    target_workspace_id: target,
+                    driver,
+                });
+            }
+        }
+        state.outputs.retain(|name, _| seen_outputs.contains(name));
+
+        let mut seen_workspaces = HashSet::new();
+        for (_, _, ws) in layout.workspaces() {
+            let id = ws.id().get();
+            let mut view = ws.ipc_column_view();
+            seen_workspaces.insert(id);
+
+            let (old, mut tracker) = match state.columns.get(&id) {
+                Some(&(old, tracker)) => (Some(old), tracker),
+                None => (None, ColumnPositionTracker::new(&view)),
+            };
+            view.position = tracker.update(&view);
+
+            let changed = old.is_none_or(|old| {
+                (old.position - view.position).abs() > VIEW_POSITION_EPSILON
+                    || (old.view_pos - view.view_pos).abs() > VIEW_PIXEL_EPSILON
+                    || (old.target_view_pos - view.target_view_pos).abs() > VIEW_PIXEL_EPSILON
+                    || old.target_column != view.target_column
+                    || old.driver != view.driver
+            });
+            // The tracker always advances; the stored view is the last one actually sent.
+            let sent = if changed { view } else { old.unwrap() };
+            state.columns.insert(id, (sent, tracker));
+            if changed {
+                events.push(Event::ColumnViewChanged {
+                    workspace_id: id,
+                    position: view.position,
+                    view_pos: view.view_pos,
+                    target_view_pos: view.target_view_pos,
+                    target_column: view.target_column,
+                    driver: view.driver,
+                });
+            }
+        }
+        state.columns.retain(|id, _| seen_workspaces.contains(id));
+
+        drop(state);
+        for event in events {
+            server.send_view_event(event);
+        }
     }
 
     fn ipc_refresh_workspaces(&mut self) {

@@ -371,6 +371,15 @@ impl<W: LayoutElement> Monitor<W> {
         self.active_workspace_idx
     }
 
+    /// What is currently moving the workspace stack, for the IPC view stream.
+    pub fn workspace_switch_driver(&self) -> niri_ipc::ViewDriver {
+        match &self.workspace_switch {
+            None => niri_ipc::ViewDriver::Idle,
+            Some(WorkspaceSwitch::Gesture(_)) => niri_ipc::ViewDriver::Gesture,
+            Some(WorkspaceSwitch::Animation(_)) => niri_ipc::ViewDriver::Animation,
+        }
+    }
+
     pub fn active_workspace_ref(&self) -> &Workspace<W> {
         &self.workspaces[self.active_workspace_idx]
     }

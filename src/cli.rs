@@ -103,6 +103,8 @@ pub enum Msg {
     },
     /// Start continuously receiving events from the compositor.
     EventStream,
+    /// Start continuously receiving live view (camera) positions while they move.
+    ViewStream,
     /// Print the version of the running niri instance.
     Version,
     /// Request an error from the running niri instance.

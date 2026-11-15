@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use niri_config::utils::MergeWith as _;
 use niri_config::{CenterFocusedColumn, PresetSize, Struts};
-use niri_ipc::{ColumnDisplay, SizeChange, WindowLayout};
+use niri_ipc::{ColumnDisplay, SizeChange, ViewDriver, WindowLayout};
 use ordered_float::NotNan;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
@@ -2348,6 +2348,53 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.column_x(self.active_column_idx) + self.view_offset.target()
     }
 
+    /// Live camera state, as published over the IPC view stream.
+    pub fn ipc_view(&self) -> ColumnView {
+        let driver = match &self.view_offset {
+            ViewOffset::Gesture(_) => ViewDriver::Gesture,
+            ViewOffset::Animation(_) => ViewDriver::Animation,
+            ViewOffset::Static(_) => ViewDriver::Idle,
+        };
+
+        if self.columns.is_empty() {
+            return ColumnView {
+                position: 0.,
+                view_pos: self.view_offset.current(),
+                target_view_pos: self.view_offset.target(),
+                target_column: None,
+                driver,
+            };
+        }
+
+        // Fractional position: the active column plus how far the camera is from that column's
+        // resting offset, measured in units of the distance to the neighbouring column on that
+        // side. During a gesture the active column stays put and the resting offset is the one
+        // the gesture started from; during an animation the active column is already the target.
+        let idx = self.active_column_idx;
+        let rest = match &self.view_offset {
+            ViewOffset::Gesture(_) => self.view_offset.stationary(),
+            _ => self.view_offset.target(),
+        };
+        let dev = self.view_offset.current() - rest;
+        let step = if dev > 0. && idx + 1 < self.columns.len() {
+            self.column_x(idx + 1) - self.column_x(idx)
+        } else if dev < 0. && idx > 0 {
+            self.column_x(idx) - self.column_x(idx - 1)
+        } else {
+            // Past the first or last column: one view width per unit.
+            self.view_size.w
+        };
+        let position = idx as f64 + dev / step.max(1.);
+
+        ColumnView {
+            position,
+            view_pos: self.view_pos(),
+            target_view_pos: self.target_view_pos(),
+            target_column: Some(idx),
+            driver,
+        }
+    }
+
     // HACK: pass a self.data iterator in manually as a workaround for the lack of method partial
     // borrowing. Note that this method's return value does not borrow the entire &Self!
     fn column_xs(&self, data: impl Iterator<Item = ColumnData>) -> impl Iterator<Item = f64> {
@@ -3920,6 +3967,77 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 "interactive resize window must be present in the layout"
             );
         }
+    }
+}
+
+/// Live camera state of a scrolling layout; see [`ScrollingSpace::ipc_view`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColumnView {
+    /// Fractional column position; only meaningful while `driver` is `Gesture`. Use
+    /// [`ColumnPositionTracker`] for a position that is continuous across drivers.
+    pub position: f64,
+    pub view_pos: f64,
+    pub target_view_pos: f64,
+    pub target_column: Option<usize>,
+    pub driver: ViewDriver,
+}
+
+/// Turns successive [`ColumnView`]s into a fractional column position that is whole at rest and
+/// continuous in between.
+///
+/// The active column and the camera don't map onto each other one-to-one: when focused columns
+/// are not centered, niri may activate a different column without moving the camera at all. So
+/// the position follows the camera only while a gesture drives it, and an animation then carries
+/// it from whatever was last reported to the target column, in step with the camera.
+#[derive(Debug, Clone, Copy)]
+pub struct ColumnPositionTracker {
+    last: f64,
+    driver: ViewDriver,
+    anim_from_pos: f64,
+    anim_from_view: f64,
+    anim_target: (Option<usize>, f64),
+}
+
+impl ColumnPositionTracker {
+    pub fn new(view: &ColumnView) -> Self {
+        let last = match view.driver {
+            ViewDriver::Gesture => view.position,
+            _ => view.target_column.map_or(0., |c| c as f64),
+        };
+        Self {
+            last,
+            driver: ViewDriver::Idle,
+            anim_from_pos: last,
+            anim_from_view: view.view_pos,
+            anim_target: (view.target_column, view.target_view_pos),
+        }
+    }
+
+    pub fn update(&mut self, view: &ColumnView) -> f64 {
+        let target = view.target_column.map_or(0., |c| c as f64);
+        let position = match view.driver {
+            ViewDriver::Idle => target,
+            ViewDriver::Gesture => view.position,
+            ViewDriver::Animation => {
+                let anim_target = (view.target_column, view.target_view_pos);
+                if self.driver != ViewDriver::Animation || self.anim_target != anim_target {
+                    // A new (or retargeted) animation starts from what was last reported.
+                    self.anim_from_pos = self.last;
+                    self.anim_from_view = view.view_pos;
+                    self.anim_target = anim_target;
+                }
+                let span = view.target_view_pos - self.anim_from_view;
+                let t = if span.abs() < 0.5 {
+                    1.
+                } else {
+                    (view.view_pos - self.anim_from_view) / span
+                };
+                self.anim_from_pos + (target - self.anim_from_pos) * t
+            }
+        };
+        self.driver = view.driver;
+        self.last = position;
+        position
     }
 }
 
