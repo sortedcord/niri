@@ -115,6 +115,17 @@ pub enum Request {
     /// been removed. This can happen if the corresponding [`Event::WorkspacesChanged`] arrives
     /// before the corresponding [`Event::WindowOpenedOrChanged`].
     EventStream,
+    /// Start continuously receiving live view (camera) events.
+    ///
+    /// The compositor should reply with `Reply::Ok(Response::Handled)`, then continuously send
+    /// [`Event::WorkspaceViewChanged`] and [`Event::ColumnViewChanged`], one per line, whenever
+    /// the rendered position of a workspace stack or of a workspace's columns changes. During
+    /// gestures and animations this is up to one event per frame per moving view; nothing is sent
+    /// while views are at rest. The current state of every view is sent up-front.
+    ///
+    /// This is separate from [`Request::EventStream`] so that regular event stream clients are not
+    /// flooded with per-frame events.
+    ViewStream,
     /// Respond with an error (for testing error handling).
     ReturnError,
     /// Request information about the overview.
@@ -1725,6 +1736,54 @@ pub enum Event {
         /// Stream ID of the stopped screencast.
         stream_id: u64,
     },
+    /// The rendered position of an output's workspace stack changed.
+    ///
+    /// Only sent over [`Request::ViewStream`].
+    WorkspaceViewChanged {
+        /// Name of the output.
+        output: String,
+        /// Fractional index of the rendered workspace (0-based, so workspace `idx` is at
+        /// `idx - 1`). Integer when at rest.
+        position: f64,
+        /// Id of the workspace the view is settling on.
+        ///
+        /// This is decided as soon as a gesture ends, before the settling animation finishes.
+        target_workspace_id: u64,
+        /// What is moving the view.
+        driver: ViewDriver,
+    },
+    /// The rendered horizontal position (camera) of a workspace's scrolling layout changed.
+    ///
+    /// Only sent over [`Request::ViewStream`].
+    ColumnViewChanged {
+        /// Id of the workspace.
+        workspace_id: u64,
+        /// Fractional column position (0-based): the target column plus the camera's distance
+        /// from that column's resting position, in units of the distance to the neighbouring
+        /// column. Integer when at rest.
+        position: f64,
+        /// Current view position in logical pixels, relative to the left edge of the first
+        /// column.
+        view_pos: f64,
+        /// View position the camera is settling on.
+        target_view_pos: f64,
+        /// Column the view is settling on (0-based), or `None` if the workspace has no columns.
+        target_column: Option<usize>,
+        /// What is moving the view.
+        driver: ViewDriver,
+    },
+}
+
+/// What is currently moving a view.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum ViewDriver {
+    /// The view is at rest.
+    Idle,
+    /// The view follows an ongoing gesture (touchpad swipe, mouse drag, DnD scroll).
+    Gesture,
+    /// The view is animating, e.g. settling after a gesture or after a focus change.
+    Animation,
 }
 
 impl From<Duration> for Timestamp {

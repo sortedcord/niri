@@ -47,6 +47,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
         Msg::Layers => Request::Layers,
         Msg::KeyboardLayouts => Request::KeyboardLayouts,
         Msg::EventStream => Request::EventStream,
+        Msg::ViewStream => Request::ViewStream,
         Msg::RequestError => Request::ReturnError,
         Msg::OverviewState => Request::OverviewState,
         Msg::Casts => Request::Casts,
@@ -529,7 +530,31 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                     Event::CastStopped { stream_id } => {
                         println!("Cast stopped: stream id {stream_id}");
                     }
+                    event @ (Event::WorkspaceViewChanged { .. }
+                    | Event::ColumnViewChanged { .. }) => print_view_event(event),
                 }
+            }
+        }
+        Msg::ViewStream => {
+            let Response::Handled = response else {
+                bail!("unexpected response: expected Handled, got {response:?}");
+            };
+
+            if !json {
+                println!("Started reading view events.");
+            }
+
+            let mut read_event = socket.read_events();
+            loop {
+                let event = read_event().context("error reading event from niri")?;
+
+                if json {
+                    let event = serde_json::to_string(&event).context("error formatting event")?;
+                    println!("{event}");
+                    continue;
+                }
+
+                print_view_event(event);
             }
         }
         Msg::OverviewState => {
@@ -834,5 +859,36 @@ mod tests {
         assert_snapshot!(fmt_rounded(2.004), @"2");
         assert_snapshot!(fmt_rounded(2.006), @"2.01");
         assert_snapshot!(fmt_rounded(2.1), @"2.10");
+    }
+}
+
+fn print_view_event(event: Event) {
+    match event {
+        Event::WorkspaceViewChanged {
+            output,
+            position,
+            target_workspace_id,
+            driver,
+        } => {
+            println!(
+                "Workspace view on {output}: position {position:.3}, \
+                 target workspace {target_workspace_id} ({driver:?})"
+            );
+        }
+        Event::ColumnViewChanged {
+            workspace_id,
+            position,
+            view_pos,
+            target_view_pos,
+            target_column,
+            driver,
+        } => {
+            println!(
+                "Column view of workspace {workspace_id}: position {position:.3}, \
+                 view {view_pos:.1} -> {target_view_pos:.1}, \
+                 target column {target_column:?} ({driver:?})"
+            );
+        }
+        event => println!("{event:?}"),
     }
 }

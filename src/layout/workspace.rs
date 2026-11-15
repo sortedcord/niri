@@ -1990,6 +1990,11 @@ impl<W: LayoutElement> Workspace<W> {
         &self.scrolling
     }
 
+    /// Live camera state of the scrolling layout, for the IPC view stream.
+    pub fn ipc_column_view(&self) -> super::scrolling::ColumnView {
+        self.scrolling.ipc_view()
+    }
+
     #[cfg(test)]
     pub fn floating(&self) -> &FloatingSpace<W> {
         &self.floating
