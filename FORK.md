@@ -21,6 +21,9 @@ and personal desktop configuration are not included.
 - **Native smart borders** (`layout { full-width-to-edges }`): single-window
   full-width columns blend continuously to the screen edges as they scroll into
   view, replacing external maximize/unmaximize toggling. See below.
+- **Live view stream** (`niri msg view-stream`): per-frame workspace and column
+  camera positions for shells that draw their own workspace/window switchers.
+  See below.
 - Configuration validation, lifecycle cleanup, and regression/property coverage.
 
 ### Super + three-finger carry
@@ -78,6 +81,31 @@ the edges, so a partly visible full-width neighbor keeps normal gaps.
 
 This supersedes the earlier external smart-border service; disable that service
 when using this build.
+
+### Live view stream: `niri msg view-stream`
+
+`Request::ViewStream` (`niri msg view-stream`, `--json` for one JSON event per line)
+reports where niri is actually drawing its views, so a shell can mirror swipes and
+animations exactly instead of re-deriving them from raw libinput input (which
+cannot know niri's swipe projection, snapping, ±1 workspace clamp, unlocked-axis
+hand-off, or gestures started mid-animation). Events are sampled once per
+rendered frame while a view moves and not at all while views rest; the current
+state of every view is sent first. It is a separate request so regular
+`event-stream` clients are not flooded.
+
+- `WorkspaceViewChanged { output, position, target_workspace_id, driver }`:
+  `position` is the fractional rendered workspace index on that output (0-based,
+  so workspace `idx` is at `idx - 1`). `target_workspace_id` is where it settles,
+  known as soon as a swipe ends.
+- `ColumnViewChanged { workspace_id, position, view_pos, target_view_pos,
+  target_column, driver }`: `position` is a fractional column (0-based), whole at
+  rest and continuous across a swipe, its release, and the settle animation.
+  `view_pos`/`target_view_pos` are the raw camera in logical pixels.
+- `driver` is `Idle`, `Gesture` or `Animation`.
+
+With `center-focused-column "never"` niri can activate another column without
+moving the camera; the column position then steps straight to the new column
+(there is no camera motion to follow).
 
 ## Build this branch
 
