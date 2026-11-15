@@ -330,6 +330,10 @@ pub struct Niri {
     pub bind_repeat_timer: Option<RegistrationToken>,
     pub keyboard_focus: KeyboardFocus,
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
+    /// The layout's focused window when `layer_shell_on_demand_focus` was set. If the layout
+    /// focus moves to another window by any means (a gesture, an IPC action, a closing
+    /// window), the on-demand layer gives up the keyboard. `Some(None)`: nothing was focused.
+    layer_shell_on_demand_layout_focus: Option<Option<MappedId>>,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
     pub is_fdo_idle_inhibited: Arc<AtomicBool>,
     pub keyboard_shortcuts_inhibiting_surfaces: HashMap<WlSurface, KeyboardShortcutsInhibitor>,
@@ -1138,6 +1142,24 @@ impl State {
             if !good {
                 self.niri.layer_shell_on_demand_focus = None;
             }
+        }
+
+        // An on-demand layer surface (an address bar editor, a launcher) keeps the keyboard
+        // until something else is focused explicitly. Clicks and the keybind actions clear it
+        // themselves; this catches every other way the focused window changes, like touchpad
+        // gestures.
+        if self.niri.layer_shell_on_demand_focus.is_some() {
+            let layout_focus = self.niri.layout.focus().map(|mapped| mapped.id());
+            match self.niri.layer_shell_on_demand_layout_focus {
+                None => self.niri.layer_shell_on_demand_layout_focus = Some(layout_focus),
+                Some(at_start) if at_start != layout_focus => {
+                    self.niri.layer_shell_on_demand_focus = None;
+                    self.niri.layer_shell_on_demand_layout_focus = None;
+                }
+                Some(_) => (),
+            }
+        } else {
+            self.niri.layer_shell_on_demand_layout_focus = None;
         }
 
         // Compute the current focus.
@@ -2572,6 +2594,7 @@ impl Niri {
             seat,
             keyboard_focus: KeyboardFocus::Layout { surface: None },
             layer_shell_on_demand_focus: None,
+            layer_shell_on_demand_layout_focus: None,
             idle_inhibiting_surfaces: HashSet::new(),
             is_fdo_idle_inhibited: Arc::new(AtomicBool::new(false)),
             keyboard_shortcuts_inhibiting_surfaces: HashMap::new(),
@@ -6203,6 +6226,12 @@ impl Niri {
 
         let pointer = &self.seat.get_pointer().unwrap();
         if pointer.is_grabbed() {
+            return;
+        }
+
+        // A layer surface that has the keyboard on demand (an address bar editor) keeps it while
+        // the pointer wanders over other windows; only a click or an explicit action moves it.
+        if self.layer_shell_on_demand_focus.is_some() {
             return;
         }
 
