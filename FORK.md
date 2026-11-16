@@ -121,8 +121,9 @@ binds {
 }
 ```
 
-- A dim overlay on every output says what is happening and shows the typed letters
-  as you go. The screen stays awake and idle timers are held off until you leave.
+- Every output goes completely black, with only the prompt in the middle: it says what
+  is happening and lights up the letters of `clear` as you type them. The mouse cursor
+  is hidden. The screen stays awake and idle timers are held off until you leave.
 - Windows lose keyboard focus and the pointer stops hitting anything, so nothing
   can be typed or clicked into an app. Swipes, drags and grabs already in progress are
   cancelled when it starts.

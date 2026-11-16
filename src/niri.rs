@@ -4272,8 +4272,12 @@ impl Niri {
             push
         };
 
-        // The pointer goes on the top.
-        if include_pointer && self.pointer_visibility.is_visible() {
+        // The pointer goes on the top, except in cleaning mode, where the screen is just the
+        // prompt on black and the pointer cannot move anyway.
+        if include_pointer
+            && self.pointer_visibility.is_visible()
+            && !self.cleaning_mode.is_active()
+        {
             self.render_pointer(ctx.renderer, output, &mut |elem| push(elem.into()));
         }
 

@@ -31,8 +31,8 @@ pub const UNLOCK_KEYS: [Keysym; 5] = [Keysym::c, Keysym::l, Keysym::e, Keysym::a
 
 const PADDING: i32 = 24;
 const FONT: &str = "sans 16px";
-const BORDER: i32 = 8;
-const BACKDROP_COLOR: [f32; 4] = [0., 0., 0., 0.7];
+/// The whole screen goes black, so only the prompt is visible.
+const BACKDROP_COLOR: [f32; 4] = [0., 0., 0., 1.];
 
 /// What a key event did to the unlock sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,7 +207,7 @@ impl CleaningMode {
             }
         }
 
-        // The backdrop dims everything, whether or not the text could be drawn.
+        // The backdrop covers everything, whether or not the text could be drawn.
         let data = output.user_data().get_or_insert(|| {
             Mutex::new(OutputData {
                 backdrop: SolidColorBuffer::new(output_size, BACKDROP_COLOR),
@@ -299,9 +299,10 @@ fn render(scale: f64, progress: usize) -> anyhow::Result<MemoryBuffer> {
     width += padding * 2;
     height += padding * 2;
 
+    // Black, like the backdrop, so the text appears to float on the screen.
     let surface = ImageSurface::create(cairo::Format::ARgb32, width, height)?;
     let cr = cairo::Context::new(&surface)?;
-    cr.set_source_rgb(0.1, 0.1, 0.1);
+    cr.set_source_rgb(0., 0., 0.);
     cr.paint()?;
 
     cr.move_to(padding.into(), padding.into());
@@ -313,16 +314,6 @@ fn render(scale: f64, progress: usize) -> anyhow::Result<MemoryBuffer> {
 
     cr.set_source_rgb(1., 1., 1.);
     pangocairo::functions::show_layout(&cr, &layout);
-
-    cr.move_to(0., 0.);
-    cr.line_to(width.into(), 0.);
-    cr.line_to(width.into(), height.into());
-    cr.line_to(0., height.into());
-    cr.line_to(0., 0.);
-    cr.set_source_rgb(0.43, 0.91, 0.53);
-    // Keep the border width even to avoid blurry edges.
-    cr.set_line_width((f64::from(BORDER) / 2. * scale).round() * 2.);
-    cr.stroke()?;
     drop(cr);
 
     let data = surface.take_data().unwrap();
@@ -483,6 +474,18 @@ mod tests {
         // Same text, so the same size, but the typed letters are drawn differently.
         assert_eq!(none.logical_size(), some.logical_size());
         assert!(none.logical_size().w > 100. && none.logical_size().h > 50.);
+        // The prompt has no panel: its corners are opaque black, same as the backdrop. (ARGB8888
+        // is stored as B, G, R, A bytes.)
+        let w = none.size().w as usize;
+        let h = none.size().h as usize;
+        let pixel = |x: usize, y: usize| -> [u8; 4] {
+            let i = (y * w + x) * 4;
+            none.data()[i..i + 4].try_into().unwrap()
+        };
+        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            assert_eq!(pixel(x, y), [0, 0, 0, 255], "corner at ({x}, {y})");
+        }
+        assert_eq!(BACKDROP_COLOR, [0., 0., 0., 1.]);
         assert_ne!(none.data(), some.data());
         // A higher scale gives more pixels for the same logical size.
         let scaled = render(2., 0).unwrap();
