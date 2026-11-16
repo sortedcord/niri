@@ -107,6 +107,33 @@ With `center-focused-column "never"` niri can activate another column without
 moving the camera; the column position then steps straight to the new column
 (there is no camera motion to follow).
 
+### Cleaning mode
+
+`niri msg action enter-cleaning-mode` makes niri ignore all keyboard, touchpad, mouse,
+touch and tablet input, so a keyboard or touchpad can be wiped down without switching
+anything off. Type `clear` on the keyboard to leave. Any other key starts the word over,
+and Shift, Caps Lock and the other modifiers do not matter.
+
+```kdl
+binds {
+    // Optional: a key to start it. Nothing is bound by default.
+    Mod+Shift+Alt+C { enter-cleaning-mode; }
+}
+```
+
+- A dim overlay on every output says what is happening and shows the typed letters
+  as you go. The screen stays awake and idle timers are held off until you leave.
+- Windows lose keyboard focus and the pointer stops hitting anything, so nothing
+  can be typed or clicked into an app. Swipes, drags and grabs already in progress are
+  cancelled when it starts.
+- Key presses are only matched against `clear`. They never reach an app or a
+  bind, including VT switching and the power key. The lid switch still works, and
+  devices can still be plugged in and removed.
+- `niri msg action exit-cleaning-mode` also leaves it, for example from another TTY
+  or over SSH if the keyboard cannot be used.
+- Keys still held when it ends, such as the last `r`, do not send a stray key release
+  to the focused app.
+
 ## Build this branch
 
 Install the normal [niri build dependencies](docs/wiki/Getting-Started.md), then:

@@ -3892,6 +3892,11 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     #[cfg(test)]
+    pub fn is_view_gesture_active(&self) -> bool {
+        self.view_offset.is_gesture()
+    }
+
+    #[cfg(test)]
     pub fn view_size(&self) -> Size<f64, Logical> {
         self.view_size
     }

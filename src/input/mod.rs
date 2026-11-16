@@ -58,6 +58,7 @@ use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 use self::configured_swipe::SwipeBegin;
 
 pub mod backend_ext;
+pub mod cleaning_mode;
 pub mod configured_swipe;
 pub mod move_grab;
 pub mod pick_color_grab;
@@ -124,6 +125,12 @@ impl State {
 
         // Make sure some logic like workspace clean-up has a chance to run before doing actions.
         self.niri.advance_animations();
+
+        // Cleaning mode ignores nearly everything, and does not count as activity.
+        if self.niri.cleaning_mode.is_active() {
+            self.process_cleaning_mode_event(event);
+            return;
+        }
 
         if self.niri.monitors_active {
             // Notify the idle-notifier of activity.
@@ -2028,6 +2035,8 @@ impl State {
             Action::ExpandColumnToAvailableWidth => {
                 self.niri.layout.expand_column_to_available_width();
             }
+            Action::EnterCleaningMode => self.enter_cleaning_mode(),
+            Action::ExitCleaningMode => self.exit_cleaning_mode(),
             Action::ShowHotkeyOverlay => {
                 if self.niri.hotkey_overlay.show() {
                     self.niri.queue_redraw_all();
@@ -4628,6 +4637,8 @@ fn allowed_when_locked(action: &Action) -> bool {
             | Action::PowerOnMonitors
             | Action::SwitchLayout(_)
             | Action::ToggleKeyboardShortcutsInhibit
+            | Action::EnterCleaningMode
+            | Action::ExitCleaningMode
     )
 }
 

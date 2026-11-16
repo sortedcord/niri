@@ -325,6 +325,8 @@ pub enum Action {
     ExpandColumnToAvailableWidth,
     SwitchLayout(#[knuffel(argument, str)] LayoutSwitchTarget),
     ShowHotkeyOverlay,
+    EnterCleaningMode,
+    ExitCleaningMode,
     MoveWorkspaceToMonitorLeft,
     MoveWorkspaceToMonitorRight,
     MoveWorkspaceToMonitorDown,
@@ -628,6 +630,8 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::ExpandColumnToAvailableWidth {} => Self::ExpandColumnToAvailableWidth,
             niri_ipc::Action::SwitchLayout { layout } => Self::SwitchLayout(layout),
             niri_ipc::Action::ShowHotkeyOverlay {} => Self::ShowHotkeyOverlay,
+            niri_ipc::Action::EnterCleaningMode {} => Self::EnterCleaningMode,
+            niri_ipc::Action::ExitCleaningMode {} => Self::ExitCleaningMode,
             niri_ipc::Action::MoveWorkspaceToMonitorLeft {} => Self::MoveWorkspaceToMonitorLeft,
             niri_ipc::Action::MoveWorkspaceToMonitorRight {} => Self::MoveWorkspaceToMonitorRight,
             niri_ipc::Action::MoveWorkspaceToMonitorDown {} => Self::MoveWorkspaceToMonitorDown,
@@ -1042,6 +1046,33 @@ impl FromStr for Key {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleaning_mode_actions_parse_and_convert() {
+        let config = crate::Config::parse_mem(
+            r#"
+            binds {
+                Mod+Shift+C { enter-cleaning-mode; }
+                Mod+Shift+X { exit-cleaning-mode; }
+            }
+            "#,
+        )
+        .unwrap();
+        let actions: Vec<_> = config.binds.0.iter().map(|bind| &bind.action).collect();
+        assert_eq!(
+            actions,
+            [&Action::EnterCleaningMode, &Action::ExitCleaningMode]
+        );
+
+        assert_eq!(
+            Action::from(niri_ipc::Action::EnterCleaningMode {}),
+            Action::EnterCleaningMode
+        );
+        assert_eq!(
+            Action::from(niri_ipc::Action::ExitCleaningMode {}),
+            Action::ExitCleaningMode
+        );
+    }
 
     #[test]
     fn parse_xf86_screensaver() {

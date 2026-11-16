@@ -804,6 +804,14 @@ pub enum Action {
     },
     /// Show the hotkey overlay.
     ShowHotkeyOverlay {},
+    /// Enter cleaning mode: ignore all keyboard, pointer, touch and tablet input until "clear" is
+    /// typed on the keyboard.
+    ///
+    /// The lid switch and device hot-plugging keep working. The screen stays on, and an overlay
+    /// shows how to leave. `exit-cleaning-mode` also leaves it, for example from another TTY.
+    EnterCleaningMode {},
+    /// Leave cleaning mode.
+    ExitCleaningMode {},
     /// Move the focused workspace to the monitor to the left.
     MoveWorkspaceToMonitorLeft {},
     /// Move the focused workspace to the monitor to the right.

@@ -165,6 +165,7 @@ use crate::render_helpers::{
 };
 #[cfg(feature = "xdp-gnome-screencast")]
 use crate::screencasting::Screencasting;
+use crate::ui::cleaning_mode::{CleaningMode, CleaningModeRenderElement};
 use crate::ui::config_error_notification::ConfigErrorNotification;
 use crate::ui::exit_confirm_dialog::{ExitConfirmDialog, ExitConfirmDialogRenderElement};
 use crate::ui::hotkey_overlay::HotkeyOverlay;
@@ -394,6 +395,7 @@ pub struct Niri {
     pub config_error_notification: ConfigErrorNotification,
     pub hotkey_overlay: HotkeyOverlay,
     pub exit_confirm_dialog: ExitConfirmDialog,
+    pub cleaning_mode: CleaningMode,
 
     pub window_mru_ui: WindowMruUi,
     pub pending_mru_commit: Option<PendingMruCommit>,
@@ -529,6 +531,8 @@ pub enum KeyboardFocus {
     LockScreen { surface: Option<WlSurface> },
     ScreenshotUi,
     ExitConfirmDialog,
+    // All input is ignored, so nothing is focused.
+    CleaningMode,
     Overview,
     Mru,
 }
@@ -678,6 +682,7 @@ impl KeyboardFocus {
             KeyboardFocus::LockScreen { surface } => surface.as_ref(),
             KeyboardFocus::ScreenshotUi => None,
             KeyboardFocus::ExitConfirmDialog => None,
+            KeyboardFocus::CleaningMode => None,
             KeyboardFocus::Overview => None,
             KeyboardFocus::Mru => None,
         }
@@ -690,6 +695,7 @@ impl KeyboardFocus {
             KeyboardFocus::LockScreen { surface } => surface,
             KeyboardFocus::ScreenshotUi => None,
             KeyboardFocus::ExitConfirmDialog => None,
+            KeyboardFocus::CleaningMode => None,
             KeyboardFocus::Overview => None,
             KeyboardFocus::Mru => None,
         }
@@ -1036,7 +1042,8 @@ impl State {
         let pointer = &self.niri.seat.get_pointer().unwrap();
         let location = pointer.current_location();
 
-        if !self.niri.exit_confirm_dialog.is_open()
+        if !self.niri.cleaning_mode.is_active()
+            && !self.niri.exit_confirm_dialog.is_open()
             && !self.niri.is_locked()
             && !self.niri.screenshot_ui.is_open()
         {
@@ -1163,7 +1170,9 @@ impl State {
         }
 
         // Compute the current focus.
-        let focus = if self.niri.exit_confirm_dialog.is_open() {
+        let focus = if self.niri.cleaning_mode.is_active() {
+            KeyboardFocus::CleaningMode
+        } else if self.niri.exit_confirm_dialog.is_open() {
             KeyboardFocus::ExitConfirmDialog
         } else if self.niri.is_locked() {
             KeyboardFocus::LockScreen {
@@ -2631,6 +2640,7 @@ impl Niri {
             config_error_notification,
             hotkey_overlay,
             exit_confirm_dialog,
+            cleaning_mode: CleaningMode::new(),
 
             window_mru_ui,
             pending_mru_commit: None,
@@ -3236,7 +3246,11 @@ impl Niri {
         extended_bounds: bool,
         pos: Point<f64, Logical>,
     ) -> Option<(Output, &Workspace<Mapped>)> {
-        if self.exit_confirm_dialog.is_open() || self.is_locked() || self.screenshot_ui.is_open() {
+        if self.cleaning_mode.is_active()
+            || self.exit_confirm_dialog.is_open()
+            || self.is_locked()
+            || self.screenshot_ui.is_open()
+        {
             return None;
         }
 
@@ -3269,7 +3283,8 @@ impl Niri {
     /// The cursor may be inside the window's activation region, but not within the window's input
     /// region.
     pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<&Mapped> {
-        if self.exit_confirm_dialog.is_open()
+        if self.cleaning_mode.is_active()
+            || self.exit_confirm_dialog.is_open()
             || self.is_locked()
             || self.screenshot_ui.is_open()
             || self.window_mru_ui.is_open()
@@ -3325,7 +3340,7 @@ impl Niri {
         // The ordering here must be consistent with the ordering in render() so that input is
         // consistent with the visuals.
 
-        if self.exit_confirm_dialog.is_open() {
+        if self.cleaning_mode.is_active() || self.exit_confirm_dialog.is_open() {
             return rv;
         } else if self.is_locked() {
             let Some(state) = self.output_state.get(output) else {
@@ -4029,6 +4044,7 @@ impl Niri {
             KeyboardFocus::LockScreen { .. } => true,
             KeyboardFocus::ScreenshotUi => true,
             KeyboardFocus::ExitConfirmDialog => true,
+            KeyboardFocus::CleaningMode => true,
             KeyboardFocus::Overview => true,
             KeyboardFocus::Mru => true,
         };
@@ -4041,7 +4057,9 @@ impl Niri {
 
         self.idle_inhibiting_surfaces.retain(|s| s.is_alive());
 
-        let is_inhibited = self.is_fdo_idle_inhibited.load(Ordering::SeqCst)
+        // Input is ignored in cleaning mode, so idle would otherwise kick in while cleaning.
+        let is_inhibited = self.cleaning_mode.is_active()
+            || self.is_fdo_idle_inhibited.load(Ordering::SeqCst)
             || self.idle_inhibiting_surfaces.iter().any(|surface| {
                 with_states(surface, |states| {
                     surface_primary_scanout_output(surface, states).is_some()
@@ -4258,6 +4276,10 @@ impl Niri {
         if include_pointer && self.pointer_visibility.is_visible() {
             self.render_pointer(ctx.renderer, output, &mut |elem| push(elem.into()));
         }
+
+        // Next, the cleaning mode overlay, above everything including the lock screen.
+        self.cleaning_mode
+            .render(ctx.renderer, output, &mut |elem| push(elem.into()));
 
         // Next, the screen transition texture.
         {
@@ -6576,6 +6598,7 @@ niri_render_elements! {
         ScreenshotUi = ScreenshotUiRenderElement,
         WindowMruUi = WindowMruUiRenderElement<R>,
         ExitConfirmDialog = ExitConfirmDialogRenderElement,
+        CleaningMode = CleaningModeRenderElement,
         Texture = PrimaryGpuTextureRenderElement,
         // Used for the CPU-rendered panels.
         RelocatedMemoryBuffer = RelocateRenderElement<MemoryRenderBufferRenderElement<R>>,

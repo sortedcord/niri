@@ -509,6 +509,12 @@ impl State {
         self.niri.queue_redraw_all();
     }
 
+    /// Cancels any ongoing configured swipe and window carry.
+    pub(super) fn cancel_configured_gestures(&mut self) {
+        self.finish_window_carry(true);
+        self.configured_swipe_end(true);
+    }
+
     fn finish_window_carry(&mut self, cancel: bool) {
         if self.niri.window_carry.is_none() {
             return;
