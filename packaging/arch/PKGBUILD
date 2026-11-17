@@ -3,7 +3,7 @@
 #   sudo pacman -U /var/cache/pacman/pkg/niri-26.04-1-x86_64.pkg.tar.zst
 # (or `sudo pacman -S niri`).
 pkgname=niri-sortedcord
-pkgver=26.04.r22.g6991df8
+pkgver=26.04.r24.g829006e
 pkgrel=1
 pkgdesc='Scrollable-tiling Wayland compositor (sortedcord fork: configurable touchpad gestures, window carry, full-width-to-edges)'
 arch=('x86_64')
@@ -18,7 +18,7 @@ optdepends=('xwayland-satellite: for running X11 apps in XWayland'
 provides=('niri=26.04' 'wayland-compositor')
 conflicts=('niri')
 options=(!lto)
-_commit=6991df872fc1ceaf7356053975b1e075be06cca6
+_commit=829006ed02949bb764d0a0016b366beb98b42872
 source=("niri::git+https://github.com/sortedcord/niri.git#commit=${_commit}")
 sha256sums=('SKIP')
 
