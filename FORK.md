@@ -253,6 +253,13 @@ close, and output unplug. Property tests check ghost/hidden-tile cleanup.
 ## Limitations and credits
 
 - Swipe mappings only: not a general touchscreen, pinch, or rotation framework.
+- Configured swipes are paused while the screen is locked, the screenshot UI or
+  recent-windows switcher is open, the focused window inhibits shortcuts, or the
+  pointer is grabbed (popup menu, drag-and-drop, move/resize). For finger counts
+  you configured, such a swipe is ignored rather than falling back to niri's stock
+  gestures, and niri logs why (`journalctl --user -b | grep 'touchpad swipe'`).
+  `forward-to-client` still forwards during inhibitors and grabs. Finger counts
+  with no `touchpad-gesture` binding keep the stock gestures.
 - Carry/direct dragging stays on the starting display.
 - The ghost is live, not a frozen screenshot; external app geometry changes can
   still affect its source tile.

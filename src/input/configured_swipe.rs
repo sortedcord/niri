@@ -19,13 +19,52 @@ use crate::niri::State;
 use crate::utils::{output_size, with_toplevel_role};
 
 /// What happened to a new swipe when its fingers landed.
-pub(super) enum SwipeBegin {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwipeBegin {
     /// A configured binding owns the swipe; nothing else may act on it.
     Claimed,
     /// Pass the whole swipe, as a live stream, to the window under the pointer.
     Forward,
     /// No configured binding applies; the built-in gestures may take it.
     Unclaimed,
+}
+
+/// Why configured swipe actions can't run right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwipeBlock {
+    Locked,
+    ScreenshotUi,
+    WindowMru,
+    /// The focused surface inhibits compositor shortcuts (for example a VM, or Mod+Escape).
+    ShortcutsInhibited,
+    /// Something holds a pointer grab: a popup menu, drag-and-drop, an interactive move or
+    /// resize, a window or color pick.
+    PointerGrab,
+}
+
+impl SwipeBlock {
+    fn reason(self) -> &'static str {
+        match self {
+            SwipeBlock::Locked => "the session is locked",
+            SwipeBlock::ScreenshotUi => "the screenshot UI is open",
+            SwipeBlock::WindowMru => "the recent windows switcher is open",
+            SwipeBlock::ShortcutsInhibited => {
+                "the focused window inhibits shortcuts (toggle with toggle-keyboard-shortcuts-inhibit)"
+            }
+            SwipeBlock::PointerGrab => {
+                "the pointer is grabbed (popup menu, drag-and-drop, move/resize or pick)"
+            }
+        }
+    }
+
+    /// Whether `forward-to-client` may still hand the swipe to a window. Forwarding runs no
+    /// compositor action, so only the cases where the window must not get input stop it.
+    fn allows_forward(self) -> bool {
+        matches!(
+            self,
+            SwipeBlock::ShortcutsInhibited | SwipeBlock::PointerGrab
+        )
+    }
 }
 
 /// Whether a `forward-to-client` action wants a swipe over a window with this app-id.
@@ -174,19 +213,68 @@ impl State {
         with_toplevel_role(mapped.toplevel(), |role| role.app_id.clone())
     }
 
-    pub(super) fn configured_swipe_begin(&mut self, fingers: u32) -> SwipeBegin {
-        // Never execute custom actions while locked, picking a screenshot, or
-        // another pointer grab is in progress.
-        if self.niri.is_locked()
-            || self.niri.screenshot_ui.is_open()
-            || self.niri.window_mru_ui.is_open()
-            || self.is_inhibiting_shortcuts()
-            || self.niri.seat.get_pointer().is_some_and(|p| p.is_grabbed())
-        {
-            return SwipeBegin::Unclaimed;
+    /// Why configured swipe actions must not run right now, if anything stops them.
+    pub(crate) fn configured_swipe_block(&self) -> Option<SwipeBlock> {
+        if self.niri.is_locked() {
+            Some(SwipeBlock::Locked)
+        } else if self.niri.screenshot_ui.is_open() {
+            Some(SwipeBlock::ScreenshotUi)
+        } else if self.niri.window_mru_ui.is_open() {
+            Some(SwipeBlock::WindowMru)
+        } else if self.is_inhibiting_shortcuts() {
+            Some(SwipeBlock::ShortcutsInhibited)
+        } else if self.niri.seat.get_pointer().is_some_and(|p| p.is_grabbed()) {
+            Some(SwipeBlock::PointerGrab)
+        } else {
+            None
         }
+    }
+
+    pub(crate) fn configured_swipe_begin(&mut self, fingers: u32) -> SwipeBegin {
         let held = modifiers_from_state(self.niri.seat.get_keyboard().unwrap().modifier_state());
         let mod_key = self.backend.mod_key(&self.niri.config.borrow());
+
+        // Never execute custom actions while locked, picking a screenshot, or another pointer
+        // grab is in progress. But if these fingers are configured, don't fall back to the
+        // built-in gestures either: that silently brings back stock behavior (three-finger
+        // workspace swipes, four-finger overview) that the config replaced.
+        if let Some(block) = self.configured_swipe_block() {
+            let candidates = select_candidates(
+                &self.niri.config.borrow().touchpad_gestures,
+                fingers,
+                held,
+                mod_key,
+            );
+            if candidates.is_empty() {
+                return SwipeBegin::Unclaimed;
+            }
+            if block.allows_forward() {
+                let app_id = self.pointer_window_app_id();
+                if candidates
+                    .iter()
+                    .any(|bind| forward_matches(&bind.action, app_id.as_deref()))
+                {
+                    self.niri.gesture_swipe_3f_cumulative = None;
+                    return SwipeBegin::Forward;
+                }
+            }
+            info!(
+                "ignoring a {fingers}-finger touchpad swipe instead of running its configured \
+                 gesture: {}",
+                block.reason()
+            );
+            self.niri.gesture_swipe_3f_cumulative = None;
+            self.niri.configured_swipe = Some(ConfiguredSwipe {
+                candidates: Vec::new(),
+                cumulative: Point::from((0., 0.)),
+                binding: None,
+                operation: Operation::Ignored,
+                target: None,
+                output: None,
+            });
+            return SwipeBegin::Claimed;
+        }
+
         if self.niri.window_carry.as_ref().is_some_and(|carry| {
             !self.niri.layout.carry_is_active() || !held.contains(carry.modifiers)
         }) {
@@ -264,7 +352,7 @@ impl State {
         SwipeBegin::Claimed
     }
 
-    pub(super) fn configured_swipe_update(
+    pub(crate) fn configured_swipe_update(
         &mut self,
         dx: f64,
         dy: f64,
@@ -572,7 +660,7 @@ impl State {
         }
     }
 
-    pub(super) fn configured_swipe_end(&mut self, cancelled: bool) -> bool {
+    pub(crate) fn configured_swipe_end(&mut self, cancelled: bool) -> bool {
         let Some(mut swipe) = self.niri.configured_swipe.take() else {
             return false;
         };
@@ -750,6 +838,25 @@ mod tests {
                 .direction,
             Direction::Any
         );
+    }
+
+    #[test]
+    fn only_inhibitors_and_grabs_still_allow_forwarding() {
+        let all = [
+            SwipeBlock::Locked,
+            SwipeBlock::ScreenshotUi,
+            SwipeBlock::WindowMru,
+            SwipeBlock::ShortcutsInhibited,
+            SwipeBlock::PointerGrab,
+        ];
+        let forwarding: Vec<_> = all.into_iter().filter(|b| b.allows_forward()).collect();
+        assert_eq!(
+            forwarding,
+            [SwipeBlock::ShortcutsInhibited, SwipeBlock::PointerGrab]
+        );
+        for block in all {
+            assert!(!block.reason().is_empty());
+        }
     }
 
     fn forward(pattern: Option<&str>) -> GestureAction {

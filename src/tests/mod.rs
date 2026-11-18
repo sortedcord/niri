@@ -6,6 +6,7 @@ mod server;
 
 mod animations;
 mod cleaning_mode;
+mod configured_gestures;
 mod cursor_position;
 mod cursor_spawn;
 mod floating;
