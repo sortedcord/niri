@@ -347,3 +347,84 @@ fn blending_happens_only_near_alignment() {
     layout.update_render_elements(None);
     assert_eq!(progress(&layout, 1), 0.);
 }
+
+/// Left edge of window 1 on screen: tile render position plus where the window sits in it.
+fn window_left(layout: &Layout<TestWindow>, id: usize) -> f64 {
+    let (tile, pos, _) = layout
+        .workspaces()
+        .flat_map(|(_, _, ws)| ws.tiles_with_render_positions())
+        .find(|(tile, _, _)| *tile.window().id() == id)
+        .unwrap();
+    pos.x + tile.window_loc().x
+}
+
+#[test]
+fn maximizing_grows_from_the_windows_own_position_not_the_screen_center() {
+    let mut layout = check_ops_with_options(
+        options(true),
+        [
+            Op::AddOutput(1),
+            add(1),
+            Op::SetColumnWidth(SizeChange::SetProportion(50.)),
+        ],
+    );
+    settle(&mut layout, &[1]);
+    let before = window_left(&layout, 1);
+    assert!(tile(&layout, 1).smart_edges().is_none());
+
+    // Mod+F, then the client adopts the sizes niri asks for, frame by frame.
+    Op::MaximizeColumn.apply(&mut layout);
+    let mut lefts = Vec::new();
+    for _ in 0..60 {
+        Op::Communicate(1).apply(&mut layout);
+        layout.update_render_elements(None);
+        lefts.push(window_left(&layout, 1));
+        Op::AdvanceAnimations { msec_delta: 16 }.apply(&mut layout);
+    }
+    settle(&mut layout, &[1]);
+    let after = window_left(&layout, 1);
+    assert_eq!(after, 0., "ends flush with the screen edge");
+
+    // The left edge only travels from its old spot out to the screen edge. It must never jump
+    // right, toward the middle of the screen, on the way.
+    for (frame, left) in lefts.iter().enumerate() {
+        assert!(
+            *left <= before + 0.5 && *left >= after - 0.5,
+            "frame {frame}: window left edge at {left}, outside {after}..={before} ({lefts:?})"
+        );
+    }
+}
+
+#[test]
+fn unmaximizing_shrinks_back_without_jumping_either() {
+    let mut layout = check_ops_with_options(
+        options(true),
+        [
+            Op::AddOutput(1),
+            add(1),
+            Op::SetColumnWidth(SizeChange::SetProportion(50.)),
+        ],
+    );
+    settle(&mut layout, &[1]);
+    let half_left = window_left(&layout, 1);
+    Op::MaximizeColumn.apply(&mut layout);
+    settle(&mut layout, &[1]);
+    assert_eq!(window_left(&layout, 1), 0.);
+
+    Op::MaximizeColumn.apply(&mut layout);
+    let mut lefts = Vec::new();
+    for _ in 0..60 {
+        Op::Communicate(1).apply(&mut layout);
+        layout.update_render_elements(None);
+        lefts.push(window_left(&layout, 1));
+        Op::AdvanceAnimations { msec_delta: 16 }.apply(&mut layout);
+    }
+    settle(&mut layout, &[1]);
+    assert_eq!(window_left(&layout, 1), half_left);
+    for (frame, left) in lefts.iter().enumerate() {
+        assert!(
+            (0. - 0.5..=half_left + 0.5).contains(left),
+            "frame {frame}: window left edge at {left} ({lefts:?})"
+        );
+    }
+}

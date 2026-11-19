@@ -925,10 +925,29 @@ impl<W: LayoutElement> Tile<W> {
     /// Returns the location of the window's visual geometry within this Tile.
     pub fn window_loc(&self) -> Point<f64, Logical> {
         if let Some((rect, _)) = self.smart_edges_window_rect() {
-            let loc = if self.resize_animation.is_some() {
-                // During a client resize, draw the animated size centered in the blended rect.
+            let loc = if let Some(resize) = &self.resize_animation {
+                // During a client resize, move the window's rectangle from where it was when the
+                // resize started (centered in its old tile, like any other resize) to the blended
+                // edges rectangle, and draw the animated size centered in it.
+                //
+                // Centering the animated size directly in the final rect would put a window
+                // that is just starting to grow (e.g. half width, on Mod+F) in the middle of the
+                // edges, so it would jump to the screen center and expand from there.
+                let val = resize.anim.value();
+                let lerp = |a: f64, b: f64| a + (b - a) * val;
+                let from_size = resize.size_from;
+                let from_loc: Point<f64, Logical> = Point::from((
+                    (resize.tile_size_from.w - from_size.w) / 2.,
+                    (resize.tile_size_from.h - from_size.h) / 2.,
+                ));
+                let rect_loc =
+                    Point::from((lerp(from_loc.x, rect.loc.x), lerp(from_loc.y, rect.loc.y)));
+                let rect_size: Size<f64, Logical> = Size::from((
+                    lerp(from_size.w, rect.size.w),
+                    lerp(from_size.h, rect.size.h),
+                ));
                 let size = self.animated_window_size();
-                rect.loc + Point::from(((rect.size.w - size.w) / 2., (rect.size.h - size.h) / 2.))
+                rect_loc + Point::from(((rect_size.w - size.w) / 2., (rect_size.h - size.h) / 2.))
             } else {
                 rect.loc
             };
