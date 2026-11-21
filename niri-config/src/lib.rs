@@ -1490,6 +1490,7 @@ mod tests {
                 always_center_single_column: false,
                 empty_workspace_above_first: false,
                 full_width_to_edges: false,
+                full_width_to_edges_top: None,
                 default_column_display: Tabbed,
                 gaps: 8.0,
                 struts: Struts {
@@ -1918,6 +1919,7 @@ mod tests {
                     float_spawn: None,
                     scroll_factor: None,
                     tiled_state: None,
+                    full_width_to_edges_top: None,
                     background_effect: BackgroundEffectRule {
                         xray: None,
                         blur: None,

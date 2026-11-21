@@ -180,6 +180,23 @@ While partially expanded, the window is presented slightly scaled (within a few 
 Pointer input follows the presented geometry.
 The blend currently follows horizontal scrolling only, and also applies inside the overview.
 
+Adjacent full-width columns blend as one run: scrolling between two of them keeps both at the edges the whole way (no detour through normal gaps), and the sides they share follow the scroll so the two windows always meet exactly.
+
+#### `full-width-to-edges-top`
+
+By default the edges are those of the working area, so they stop at layer-shell exclusive zones such as a bar.
+`full-width-to-edges-top` instead places the top edge this many logical pixels from the top of the output, ignoring exclusive zones there.
+This lets a bar keep a constant exclusive zone, so that ordinary windows never resize, while expanded windows reach under it, for example up to a compact bar, or all the way to the top under a translucent one.
+The [`full-width-to-edges-top` window rule](./Configuration:-Window-Rules.md#full-width-to-edges-top) overrides it per window.
+
+```kdl
+layout {
+    full-width-to-edges
+    // Bar reserves 58 px; expanded windows start just under its 40 px compact form.
+    full-width-to-edges-top 40
+}
+```
+
 ### `default-column-display`
 
 <sup>Since: 25.02</sup>

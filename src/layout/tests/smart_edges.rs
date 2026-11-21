@@ -511,3 +511,63 @@ fn a_run_of_full_width_windows_still_blends_out_toward_a_normal_neighbor() {
     assert_eq!(progress(&layout, 1), 0.);
     assert_eq!(progress(&layout, 2), 0.);
 }
+
+fn options_with_top(top: Option<f64>) -> Options {
+    let mut options = options(true);
+    options.layout.full_width_to_edges_top = top;
+    options
+}
+
+#[test]
+fn edges_top_moves_only_the_top_of_the_edge_rectangle() {
+    let mut layout = check_ops_with_options(
+        options_with_top(Some(40.)),
+        [
+            Op::AddOutput(1),
+            add(1),
+            Op::MaximizeColumn,
+            add(2),
+            Op::FocusColumnLeft,
+        ],
+    );
+    settle(&mut layout, &[1, 2]);
+    let smart = tile(&layout, 1).smart_edges().unwrap();
+    // Same slot as always; the edges start 40 px from the top of the output.
+    assert_eq!(smart.slot, Size::from((1248., 688.)));
+    assert_eq!(
+        smart.edges,
+        Rectangle::new(Point::from((-16., 24.)), Size::from((1280., 680.)))
+    );
+    assert_eq!(
+        tile(&layout, 1).window().requested_size(),
+        Some(Size::from((1280, 680)))
+    );
+    let rect = window_on_screen(&layout, 1);
+    assert_eq!((rect.loc.y, rect.size.h), (40., 680.));
+    // The normal neighbor is unaffected.
+    assert!(tile(&layout, 2).smart_edges().is_none());
+    assert_eq!(tile(&layout, 2).tile_size().h, 688.);
+}
+
+#[test]
+fn window_rule_overrides_the_edges_top() {
+    let mut layout = check_ops_with_options(
+        options_with_top(Some(40.)),
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams {
+                    rules: Some(ResolvedWindowRules {
+                        full_width_to_edges_top: Some(0.),
+                        ..ResolvedWindowRules::default()
+                    }),
+                    ..TestWindowParams::new(1)
+                },
+            },
+            Op::MaximizeColumn,
+        ],
+    );
+    settle(&mut layout, &[1]);
+    let rect = window_on_screen(&layout, 1);
+    assert_eq!((rect.loc.y, rect.size.h), (0., 720.));
+}

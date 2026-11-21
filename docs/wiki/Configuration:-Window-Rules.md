@@ -942,6 +942,20 @@ window-rule {
 }
 ```
 
+#### `full-width-to-edges-top`
+
+<sup>Fork feature, not upstream niri</sup>
+
+Override [`layout.full-width-to-edges-top`](./Configuration:-Layout.md#full-width-to-edges-top) for matching windows: where the top edge of an expanded full-width window goes, in logical pixels from the top of the output.
+
+```kdl
+// Expanded terminals go all the way up, under the bar.
+window-rule {
+    match app-id="^kitty$"
+    full-width-to-edges-top 0
+}
+```
+
 #### `tiled-state`
 
 <sup>Since: 25.05</sup>

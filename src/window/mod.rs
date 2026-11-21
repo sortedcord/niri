@@ -126,6 +126,9 @@ pub struct ResolvedWindowRules {
     /// Override whether to set the Tiled xdg-toplevel state on the window.
     pub tiled_state: Option<bool>,
 
+    /// Override `layout.full_width_to_edges_top` for this window.
+    pub full_width_to_edges_top: Option<f64>,
+
     /// Background effect configuration.
     pub background_effect: BackgroundEffect,
 
@@ -315,6 +318,9 @@ impl ResolvedWindowRules {
                 }
                 if let Some(x) = rule.tiled_state {
                     resolved.tiled_state = Some(x);
+                }
+                if let Some(x) = rule.full_width_to_edges_top {
+                    resolved.full_width_to_edges_top = Some(x.0);
                 }
 
                 resolved

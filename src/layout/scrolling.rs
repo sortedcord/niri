@@ -5050,9 +5050,24 @@ impl<W: LayoutElement> Column<W> {
             return None;
         }
 
-        let edges_size = self.parent_area.size;
-        // Respect windows that cannot grow to the edges (fixed-size dialogs and the like).
+        // The edges: the parent area, optionally with its top moved to a fixed distance from
+        // the top of the output (`full-width-to-edges-top`), e.g. to reach under a panel that
+        // keeps a constant exclusive zone so that other windows never resize.
         let tile = &self.tiles[0];
+        let mut edges = self.parent_area;
+        let top = tile
+            .window()
+            .rules()
+            .full_width_to_edges_top
+            .or(self.options.layout.full_width_to_edges_top);
+        if let Some(top) = top {
+            let bottom = edges.loc.y + edges.size.h;
+            let top = top.clamp(0., f64::max(0., bottom - 1.));
+            edges.loc.y = top;
+            edges.size.h = bottom - top;
+        }
+        let edges_size = edges.size;
+        // Respect windows that cannot grow to the edges (fixed-size dialogs and the like).
         let max = tile.window().max_size();
         let min = tile.window().min_size();
         if (max.w > 0 && f64::from(max.w) < edges_size.w)
@@ -5070,7 +5085,7 @@ impl<W: LayoutElement> Column<W> {
             self.working_area.loc.x + gaps,
             self.working_area.loc.y + gaps,
         ));
-        Some(Rectangle::new(self.parent_area.loc - aligned, edges_size))
+        Some(Rectangle::new(edges.loc - aligned, edges_size))
     }
 
     fn width(&self) -> f64 {

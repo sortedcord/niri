@@ -79,6 +79,8 @@ pub struct WindowRule {
     pub scroll_factor: Option<FloatOrInt<0, 100>>,
     #[knuffel(child, unwrap(argument))]
     pub tiled_state: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
+    pub full_width_to_edges_top: Option<FloatOrInt<0, 65535>>,
     #[knuffel(child, default)]
     pub background_effect: BackgroundEffectRule,
     #[knuffel(child, default)]

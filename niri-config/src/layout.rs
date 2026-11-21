@@ -23,6 +23,9 @@ pub struct Layout {
     /// Continuously expand single-window full-width columns to the screen edges as they scroll
     /// into view, hiding gaps and decorations, without changing neighboring column positions.
     pub full_width_to_edges: bool,
+    /// Top of the edge rectangle for `full_width_to_edges`, in logical pixels from the top of
+    /// the output, ignoring layer-shell exclusive zones there. `None`: the working area's top.
+    pub full_width_to_edges_top: Option<f64>,
     pub default_column_display: ColumnDisplay,
     pub gaps: f64,
     pub struts: Struts,
@@ -47,6 +50,7 @@ impl Default for Layout {
             always_center_single_column: false,
             empty_workspace_above_first: false,
             full_width_to_edges: false,
+            full_width_to_edges_top: None,
             default_column_display: ColumnDisplay::Normal,
             gaps: 16.,
             struts: Struts::default(),
@@ -89,6 +93,10 @@ impl MergeWith<LayoutPart> for Layout {
             self.default_column_width = x.0;
         }
 
+        if let Some(x) = part.full_width_to_edges_top {
+            self.full_width_to_edges_top = Some(x.0);
+        }
+
         if self.preset_column_widths.is_empty() {
             self.preset_column_widths = Layout::default().preset_column_widths;
         }
@@ -125,6 +133,8 @@ pub struct LayoutPart {
     pub empty_workspace_above_first: Option<Flag>,
     #[knuffel(child)]
     pub full_width_to_edges: Option<Flag>,
+    #[knuffel(child, unwrap(argument))]
+    pub full_width_to_edges_top: Option<FloatOrInt<0, 65535>>,
     #[knuffel(child, unwrap(argument, str))]
     pub default_column_display: Option<ColumnDisplay>,
     #[knuffel(child, unwrap(argument))]

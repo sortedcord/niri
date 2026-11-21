@@ -72,6 +72,11 @@ the edges, so a partly visible full-width neighbor keeps normal gaps.
 - Mid-scroll, the window is presented scaled by a few percent between the two
   rectangles (slightly softer while moving); when aligned, it is drawn 1:1.
   Pointer input maps through the presented geometry.
+- Adjacent full-width columns form a run that blends as one, so scrolling between
+  two of them stays at the edges; their shared sides follow the scroll and meet.
+- `full-width-to-edges-top <px>` (layout, and a window rule of the same name) puts
+  the top edge at a fixed distance from the output top, ignoring exclusive zones,
+  so a bar can keep a constant exclusive zone and still be reached under.
 - Stacked/tabbed columns, floating, fullscreen, and maximized-to-edges windows are
   unaffected; windows whose max size is smaller than the edges are left alone.
   Leaving eligibility keeps the slot until the client commits its new size, so
