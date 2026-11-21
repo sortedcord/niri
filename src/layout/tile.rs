@@ -153,6 +153,11 @@ pub type TileRenderSnapshot =
 ///
 /// `progress` blends the visual window rectangle between the gapped slot (0) and the edges (1);
 /// the layout always uses `slot`, so neighboring columns never move.
+///
+/// The left and right sides blend separately (`left`, `right`), so that two adjacent expanded
+/// columns meet at a shared edge while the camera travels between them instead of overlapping
+/// (or both falling back to gaps). `progress` drives the top and bottom and everything that is
+/// not per side (borders, corner radius, and so on).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct SmartEdges {
     /// Tile size used by the layout (including any border), as if the column were not expanded.
@@ -160,6 +165,8 @@ pub(super) struct SmartEdges {
     /// Edge rectangle in tile-local coordinates, relative to the tile's aligned position.
     pub edges: Rectangle<f64, Logical>,
     pub progress: f64,
+    pub left: f64,
+    pub right: f64,
     /// The column is no longer eligible; keep the slot until the client commits a new size.
     pub leaving: bool,
 }
@@ -796,11 +803,15 @@ impl<W: LayoutElement> Tile<W> {
         animate: bool,
         transaction: Option<Transaction>,
     ) {
-        let progress = self.smart_edges.map_or(0., |smart| smart.progress);
+        let (progress, left, right) = self
+            .smart_edges
+            .map_or((0., 0., 0.), |smart| (smart.progress, smart.left, smart.right));
         self.smart_edges = Some(SmartEdges {
             slot,
             edges,
             progress,
+            left,
+            right,
             leaving: false,
         });
         self.window.request_size(
@@ -824,12 +835,21 @@ impl<W: LayoutElement> Tile<W> {
         self.smart_edges = None;
     }
 
-    pub(super) fn set_smart_edges_progress(&mut self, progress: f64) {
+    /// Sets the blend toward the edges: `progress` for the top and bottom, `left` and `right`
+    /// for the two sides (equal to `progress` unless the column borders another expanded one).
+    pub(super) fn set_smart_edges_progress(&mut self, progress: f64, left: f64, right: f64) {
         if let Some(smart) = &mut self.smart_edges {
             if !smart.leaving {
                 smart.progress = progress.clamp(0., 1.);
+                smart.left = left.clamp(0., 1.);
+                smart.right = right.clamp(0., 1.);
             }
         }
+    }
+
+    /// Whether the window is currently drawn edge-to-edge capable (eligible and committed).
+    pub(super) fn has_smart_edges(&self) -> bool {
+        self.active_smart_edges().is_some_and(|smart| !smart.leaving)
     }
 
     #[cfg(test)]
@@ -871,10 +891,18 @@ impl<W: LayoutElement> Tile<W> {
         );
 
         let p = smart.progress.clamp(0., 1.);
-        let lerp = |a: f64, b: f64| a + (b - a) * p;
+        let lerp = |a: f64, b: f64, p: f64| a + (b - a) * p;
+        let left = lerp(from.loc.x, to.loc.x, smart.left.clamp(0., 1.));
+        let right = lerp(
+            from.loc.x + from.size.w,
+            to.loc.x + to.size.w,
+            smart.right.clamp(0., 1.),
+        );
+        let top = lerp(from.loc.y, to.loc.y, p);
+        let bottom = lerp(from.loc.y + from.size.h, to.loc.y + to.size.h, p);
         let rect = Rectangle::new(
-            Point::from((lerp(from.loc.x, to.loc.x), lerp(from.loc.y, to.loc.y))),
-            Size::from((lerp(from.size.w, to.size.w), lerp(from.size.h, to.size.h))),
+            Point::from((left, top)),
+            Size::from((f64::max(1., right - left), f64::max(1., bottom - top))),
         );
         let scale = Scale::from((rect.size.w / window.w, rect.size.h / window.h));
         Some((rect, scale))

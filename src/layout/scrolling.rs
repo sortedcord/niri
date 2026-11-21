@@ -409,6 +409,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
     /// Blends each eligible full-width tile toward the screen edges by how close its column is to
     /// being aligned in view. Purely visual: column geometry is unchanged.
+    ///
+    /// Adjacent expanded columns form a run that blends as one: while the camera travels between
+    /// two of them, both stay at the edges (no detour through normal gaps), and their shared
+    /// sides follow the camera so that the two windows always meet without overlapping.
     pub fn update_smart_edges_progress(&mut self) {
         let view_pos = self.view_pos();
         let gaps = self.options.layout.gaps;
@@ -417,10 +421,21 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         // stays partly visible next to a focused neighbor is therefore fully normal.
         let blend = f64::max(1., self.working_area.size.w * SMART_EDGES_BLEND_FRACTION);
         let view_at_rest = self.view_offset.is_static();
-        for (col, col_x) in self.columns_mut() {
-            let render_offset = col.render_offset().x;
-            let distance = (col_x - view_pos + render_offset - aligned_x).abs();
-            let progress = if view_at_rest && render_offset == 0. {
+
+        // Per column: the view position at which it is aligned, whether it is still (no move
+        // animation), and whether it is expanded (eligible and committed to the edge size).
+        let xs: Vec<f64> = self.column_xs(self.data.iter().copied()).collect();
+        let cols: Vec<(f64, bool, bool)> = zip(&self.columns, &xs)
+            .map(|(col, &col_x)| {
+                let render_offset = col.render_offset().x;
+                let expanded = col.tiles.len() == 1 && col.tiles[0].has_smart_edges();
+                (col_x + render_offset - aligned_x, render_offset == 0., expanded)
+            })
+            .collect();
+
+        // Progress toward the edges for a camera `distance` away from a column or run.
+        let progress_at = |distance: f64, still: bool| {
+            if view_at_rest && still {
                 // Never rest in between: aligned is fully expanded, anything else normal.
                 if distance < 0.5 {
                     1.
@@ -431,9 +446,53 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 let near = 1. - (distance / blend).clamp(0., 1.);
                 // Smoothstep: no velocity discontinuity at either end of the blend.
                 near * near * (3. - 2. * near)
+            }
+        };
+
+        let mut sides = vec![(0., 0., 0.); cols.len()];
+        let mut idx = 0;
+        while idx < cols.len() {
+            // The run of adjacent expanded columns starting here (or just this column).
+            let start = idx;
+            let mut end = idx;
+            if cols[idx].2 {
+                while end + 1 < cols.len() && cols[end + 1].2 {
+                    end += 1;
+                }
+            }
+            let (from, to) = (cols[start].0, cols[end].0);
+            let distance = if view_pos < from {
+                from - view_pos
+            } else if view_pos > to {
+                view_pos - to
+            } else {
+                0.
             };
+            let still = cols[start..=end].iter().all(|col| col.1);
+            let progress = progress_at(distance, still);
+
+            for i in start..=end {
+                // A shared side follows the camera from one neighbor's alignment to the other's:
+                // fully out when this column is aligned, fully in when the neighbor is.
+                let toward = |other: usize| {
+                    let (a, b) = (cols[other].0, cols[i].0);
+                    let span = b - a;
+                    if span.abs() < 1. {
+                        1.
+                    } else {
+                        ((view_pos - a) / span).clamp(0., 1.)
+                    }
+                };
+                let left = if i > start { progress * toward(i - 1) } else { progress };
+                let right = if i < end { progress * toward(i + 1) } else { progress };
+                sides[i] = (progress, left, right);
+            }
+            idx = end + 1;
+        }
+
+        for (col, (progress, left, right)) in zip(&mut self.columns, sides) {
             for tile in &mut col.tiles {
-                tile.set_smart_edges_progress(progress);
+                tile.set_smart_edges_progress(progress, left, right);
             }
         }
     }

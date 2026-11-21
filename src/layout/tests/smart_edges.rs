@@ -428,3 +428,86 @@ fn unmaximizing_shrinks_back_without_jumping_either() {
         );
     }
 }
+
+/// Two full-width windows side by side (1 then 2), with 1 focused.
+fn two_full_width() -> Layout<TestWindow> {
+    let mut layout = check_ops_with_options(
+        options(true),
+        [
+            Op::AddOutput(1),
+            add(1),
+            Op::MaximizeColumn,
+            add(2),
+            Op::MaximizeColumn,
+            Op::FocusColumnLeft,
+        ],
+    );
+    settle(&mut layout, &[1, 2]);
+    layout
+}
+
+/// The window's visual rectangle on screen (tile render position plus its rect in the tile).
+fn window_on_screen(layout: &Layout<TestWindow>, id: usize) -> Rectangle<f64, Logical> {
+    let (tile, pos, _) = layout
+        .workspaces()
+        .flat_map(|(_, _, ws)| ws.tiles_with_render_positions())
+        .find(|(tile, _, _)| *tile.window().id() == id)
+        .unwrap();
+    let (rect, _) = tile.smart_edges_window_rect().unwrap();
+    Rectangle::new(pos + rect.loc, rect.size)
+}
+
+#[test]
+fn swiping_between_two_full_width_windows_stays_at_the_edges() {
+    let mut layout = two_full_width();
+    assert_eq!(progress(&layout, 1), 1.);
+    // At rest the neighbor stays out of view: it must not reach over the focused window.
+    assert_eq!(window_on_screen(&layout, 1).loc.x, 0.);
+    assert_eq!(window_on_screen(&layout, 1).size.w, 1280.);
+    assert!(window_on_screen(&layout, 2).loc.x >= 1280.);
+
+    let output = layout.outputs().next().unwrap().clone();
+    layout.view_offset_gesture_begin(&output, None, false);
+    // One full column is 1248 + 16; travel it in steps.
+    for step in 1..=20 {
+        layout.view_offset_gesture_update(63.2, Duration::from_millis(step * 10), false);
+        layout.update_render_elements(None);
+        // No intermediate phase: both stay full height the whole way.
+        assert_eq!(progress(&layout, 1), 1., "step {step}");
+        assert_eq!(progress(&layout, 2), 1., "step {step}");
+        let (a, b) = (window_on_screen(&layout, 1), window_on_screen(&layout, 2));
+        assert_eq!(a.loc.y, 0.);
+        assert_eq!(a.size.h, 720.);
+        // The two windows meet exactly: no gap, no overlap.
+        let seam = b.loc.x - (a.loc.x + a.size.w);
+        assert!(seam.abs() < 1e-6, "step {step}: seam {seam}");
+    }
+    // Arrived: window 2 fills the screen exactly like window 1 did.
+    let b = window_on_screen(&layout, 2);
+    assert!((b.loc.x - 0.).abs() < 1e-6 && (b.size.w - 1280.).abs() < 1e-6);
+    layout.verify_invariants();
+}
+
+#[test]
+fn a_run_of_full_width_windows_still_blends_out_toward_a_normal_neighbor() {
+    // 1 and 2 are full width, 3 is half width. Scrolling from 2 to 3 leaves the run as before.
+    let mut layout = check_ops_with_options(
+        options(true),
+        [
+            Op::AddOutput(1),
+            add(1),
+            Op::MaximizeColumn,
+            add(2),
+            Op::MaximizeColumn,
+            add(3),
+            Op::FocusColumnLeft,
+        ],
+    );
+    settle(&mut layout, &[1, 2, 3]);
+    assert_eq!(progress(&layout, 2), 1.);
+    Op::FocusColumnRight.apply(&mut layout);
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.update_render_elements(None);
+    assert_eq!(progress(&layout, 1), 0.);
+    assert_eq!(progress(&layout, 2), 0.);
+}
